@@ -76,6 +76,7 @@ struct tr_pex;
 struct tr_torrent;
 struct struct_utp_context;
 struct tr_variant;
+class tr_socks5_udp;
 
 namespace libtransmission::test
 {
@@ -157,6 +158,8 @@ private:
 
             return session_.announceIP(family);
         }
+
+        [[nodiscard]] tr_socks5_udp* socks5_udp() const noexcept override;
 
     private:
         tr_session& session_;
@@ -1450,6 +1453,9 @@ private:
 
     // depends-on: udp_core_
     AnnouncerUdpMediator announcer_udp_mediator_{ *this };
+
+    // depends-on: settings_, session_thread_ (event_base)
+    std::unique_ptr<tr_socks5_udp> socks5_udp_;
 
     // depends-on: timer_maker_, torrents_, peer_mgr_
     DhtMediator dht_mediator_{ *this };
