@@ -182,6 +182,35 @@ void onAnnounceDone(tr_web::FetchResponse const& web_response)
     }
 }
 
+template <typename OutputIt,
+          std::enable_if_t<fmt::detail::is_output_iterator<OutputIt, char>::value, int> = 0>
+void append_ip_arg(OutputIt out, std::string_view name, const tr_address &addr)
+{
+    auto const display_name = addr.display_name();
+    fmt::format_to(out, "&{}=", name);
+    tr_urlPercentEncode(out, display_name);
+}
+
+
+template <typename OutputIt,
+          std::enable_if_t<fmt::detail::is_output_iterator<OutputIt, char>::value, int> = 0>
+void append_external_ip_arg(OutputIt &&out, std::string_view name, const tr_session *session, tr_address_type family, bool always)
+{
+    std::optional<tr_address> addr;
+    if (session->useAnnounceIP())
+    {
+        addr = session->announceIP(family);
+    }
+    if (!addr && (session->useAnnounceIP() || always))
+    {
+        addr = session->global_address(family);
+    }
+    if (addr)
+    {
+        append_ip_arg(out, name, *addr);
+    }
+}
+
 void announce_url_new(tr_urlbuf& url, tr_session const* session, tr_announce_request const& req)
 {
     url.clear();
@@ -234,24 +263,8 @@ void announce_url_new(tr_urlbuf& url, tr_session const* session, tr_announce_req
         fmt::format_to(out, "&trackerid={}", req.tracker_id);
     }
 
-    if (auto ipv4_addr = session->global_address(TR_AF_INET); ipv4_addr)
-    {
-        auto const display_name = ipv4_addr->display_name();
-        fmt::format_to(out, "&ipv4=");
-        tr_urlPercentEncode(out, display_name);
-    }
-
-    if (auto ipv6_addr = session->global_address(TR_AF_INET6); ipv6_addr)
-    {
-        auto const display_name = ipv6_addr->display_name();
-        fmt::format_to(out, "&ipv6=");
-        tr_urlPercentEncode(out, display_name);
-    }
-}
-
-[[nodiscard]] std::string format_ip_arg(std::string_view ip)
-{
-    return fmt::format("&ip={:s}", ip);
+    append_external_ip_arg(out, "ipv4", session, TR_AF_INET, true);
+    append_external_ip_arg(out, "ipv6", session, TR_AF_INET6, true);
 }
 
 } // namespace announce_helpers
@@ -285,7 +298,7 @@ void tr_tracker_http_announce(
 
     auto do_make_request = [&](std::string_view const& protocol_name, tr_web::FetchOptions&& opt)
     {
-        tr_logAddTrace(fmt::format("Sending {} announce to libcurl: '{}'", protocol_name, opt.url), request.log_name);
+        tr_logAddInfo(fmt::format("Sending {} announce to libcurl: '{}'", protocol_name, opt.url), request.log_name);
         session->fetch(std::move(opt));
     };
 
@@ -296,12 +309,10 @@ void tr_tracker_http_announce(
      * a request that we don't know whether it will go through IPv6 or IPv4.
      */
     static auto const use_curl_workaround = curl_version_info(CURLVERSION_NOW)->version_num < 0x074D00 /* 7.77.0 */;
-    if (use_curl_workaround || session->useAnnounceIP())
+    if (use_curl_workaround)
     {
-        if (session->useAnnounceIP())
-        {
-            options.url += format_ip_arg(session->announceIP());
-        }
+        // we don't know the family, append _some_ &ip=
+        append_external_ip_arg(std::back_inserter(options.url), "ip", session, TR_AF_INET, false);
 
         d->requests_sent_count = 1;
         do_make_request(""sv, std::move(options));
@@ -311,13 +322,19 @@ void tr_tracker_http_announce(
         d->requests_sent_count = 2;
 
         // First try to send the announce via IPv4
+        // We know the family; append &ip= using preferred IPv4
         auto ipv4_options = options;
         ipv4_options.ip_proto = tr_web::FetchOptions::IPProtocol::V4;
+        ipv4_options.url = std::string{ options.url };
+        append_external_ip_arg(std::back_inserter(ipv4_options.url), "ip", session, TR_AF_INET, false);
         do_make_request("IPv4"sv, std::move(ipv4_options));
 
-        // Then try to send via IPv6
-        options.ip_proto = tr_web::FetchOptions::IPProtocol::V6;
-        do_make_request("IPv6"sv, std::move(options));
+        // Then try to send via IPv6, ditto for &ip=
+        auto ipv6_options = options;
+        ipv6_options.ip_proto = tr_web::FetchOptions::IPProtocol::V6;
+        ipv6_options.url = std::string{ options.url };
+        append_external_ip_arg(std::back_inserter(ipv6_options.url), "ip", session, TR_AF_INET6, false);
+        do_make_request("IPv6"sv, std::move(ipv6_options));
     }
 }
 

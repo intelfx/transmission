@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "libtransmission/log.h"
 #ifndef __TRANSMISSION__
 #error only libtransmission should #include this header.
 #endif
@@ -147,14 +148,14 @@ private:
             session_.udp_core_->sendto(buf, buflen, addr, addrlen);
         }
 
-        [[nodiscard]] std::optional<tr_address> announce_ip() const override
+        [[nodiscard]] std::optional<tr_address> announce_ip(tr_address_type family) const override
         {
             if (!session_.useAnnounceIP())
             {
                 return {};
             }
 
-            return tr_address::from_string(session_.announceIP());
+            return session_.announceIP(family);
         }
 
     private:
@@ -651,9 +652,21 @@ public:
 
     // announce ip
 
-    [[nodiscard]] constexpr std::string const& announceIP() const noexcept
+    [[nodiscard]] constexpr std::optional<tr_address> announceIP(tr_address_type family) const noexcept
     {
-        return settings().announce_ip;
+        for (const auto &a: settings().announce_ip)
+        {
+            auto addr = tr_address::from_string(a);
+            if (!addr)
+            {
+                tr_logAddError(fmt::format("XXX: invalid announce_ip member: {}", a));
+            }
+            if (addr && addr->type == family)
+            {
+                return addr;
+            }
+        }
+        return {};
     }
 
     [[nodiscard]] constexpr bool useAnnounceIP() const noexcept
