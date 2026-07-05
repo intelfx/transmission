@@ -148,14 +148,14 @@ private:
             session_.udp_core_->sendto(buf, buflen, addr, addrlen);
         }
 
-        [[nodiscard]] std::optional<tr_address> announce_ip() const override
+        [[nodiscard]] std::optional<tr_address> announce_ip(tr_address_type family) const override
         {
             if (!session_.useAnnounceIP())
             {
                 return {};
             }
 
-            return tr_address::from_string(session_.announceIP());
+            return session_.announceIP(family);
         }
 
     private:
@@ -463,7 +463,7 @@ public:
         };
         std::chrono::milliseconds sleep_per_seconds_during_verify = std::chrono::milliseconds{ 100 };
         std::optional<std::string> proxy_url;
-        std::string announce_ip;
+        std::map<tr_address_type, tr_address> announce_ip;
         std::string bind_address_ipv4;
         std::string bind_address_ipv6;
         std::string blocklist_url = "http://www.example.com/blocklist";
@@ -798,9 +798,14 @@ public:
 
     // announce ip
 
-    [[nodiscard]] constexpr std::string const& announceIP() const noexcept
+    [[nodiscard]] std::optional<tr_address> announceIP(tr_address_type family) const noexcept
     {
-        return settings().announce_ip;
+        auto it = settings().announce_ip.find(family);
+        if (it != settings().announce_ip.end())
+        {
+            return it->second;
+        }
+        return {};
     }
 
     [[nodiscard]] constexpr bool useAnnounceIP() const noexcept

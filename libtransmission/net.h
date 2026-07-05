@@ -159,6 +159,8 @@ tr_address_type tr_af_to_ip_protocol(int af);
 
 struct tr_address
 {
+    static constexpr size_t MAX_ADDRSTRLEN = std::max(INET_ADDRSTRLEN, INET6_ADDRSTRLEN);
+
     [[nodiscard]] static std::optional<tr_address> from_string(std::string_view address_sv);
     [[nodiscard]] static std::pair<tr_address, std::byte const*> from_compact_ipv4(std::byte const* compact) noexcept;
     [[nodiscard]] static std::pair<tr_address, std::byte const*> from_compact_ipv6(std::byte const* compact) noexcept;

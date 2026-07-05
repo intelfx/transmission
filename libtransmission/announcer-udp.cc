@@ -690,7 +690,8 @@ public:
         auto const data = std::make_shared<tau_announce_data>(std::move(on_response));
         for (ipp_t ipp = 0; ipp < NUM_TR_AF_INET_TYPES; ++ipp)
         {
-            tracker->announces.emplace_back(static_cast<tr_address_type>(ipp), mediator_.announce_ip(), request, data);
+            // XXX: hack: since size of IP field is only 4 bytes long, we can only announce IPv4 addresses
+            tracker->announces.emplace_back(static_cast<tr_address_type>(ipp), mediator_.announce_ip(TR_AF_INET), request, data);
         }
         tracker->upkeep(false);
     }

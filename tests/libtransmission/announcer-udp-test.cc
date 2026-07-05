@@ -79,7 +79,7 @@ protected:
             return event_base_.get();
         }
 
-        [[nodiscard]] std::optional<tr_address> announce_ip() const override
+        [[nodiscard]] std::optional<tr_address> announce_ip([[maybe_unused]] tr_address_type family) const override
         {
             return {};
         }

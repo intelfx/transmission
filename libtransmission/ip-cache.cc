@@ -287,7 +287,7 @@ void tr_ip_cache::update_source_addr(tr_address_type type) noexcept
     if (auto const& source_addr = get_global_source_address(bind_addr(type), err); source_addr)
     {
         set_source_addr(*source_addr);
-        tr_logAddDebug(
+        tr_logAddInfo(
             fmt::format(
                 fmt::runtime(_("Successfully updated source {protocol} address to {ip}")),
                 fmt::arg("protocol", protocol),
@@ -299,7 +299,7 @@ void tr_ip_cache::update_source_addr(tr_address_type type) noexcept
         unset_addr(type);
         upkeep_timers_[type]->set_interval(RetryUpkeepInterval);
 
-        tr_logAddDebug(fmt::format("Couldn't obtain source {} address: {} ({})", protocol, tr_net_strerror(err), err));
+        tr_logAddWarn(fmt::format("Couldn't obtain source {} address: {} ({})", protocol, tr_net_strerror(err), err));
         if (std::all_of(std::begin(source_addr_checked_), std::end(source_addr_checked_), [](bool u) { return u; }) &&
             std::all_of(std::begin(source_addr_), std::end(source_addr_), std::logical_not{}))
         {
@@ -336,7 +336,7 @@ void tr_ip_cache::on_response_ip_query(tr_address_type type, tr_web::FetchRespon
             success = true;
             upkeep_timers_[type]->set_interval(UpkeepInterval);
 
-            tr_logAddDebug(
+            tr_logAddInfo(
                 fmt::format(
                     fmt::runtime(_("Successfully updated global {type} address to {ip} using {url}")),
                     fmt::arg("type", protocol),
@@ -354,7 +354,7 @@ void tr_ip_cache::on_response_ip_query(tr_address_type type, tr_web::FetchRespon
             return;
         }
 
-        tr_logAddDebug(
+        tr_logAddWarn(
             fmt::format(
                 "Couldn't obtain global {} address, HTTP status = {}, did_connect = {}, did_timeout = {}",
                 protocol,

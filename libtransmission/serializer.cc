@@ -540,6 +540,61 @@ tr_variant from_verify_added_mode(tr_verify_added_mode const& val)
 
     return static_cast<int64_t>(val);
 }
+
+bool to_announce_ip(tr_variant const& src, std::map<tr_address_type, tr_address> *tgt)
+{
+    std::map<tr_address_type, tr_address> ret;
+
+    if (auto val = src.value_if<std::string_view>())
+    {
+        std::string_view sv = *val, item;
+        while (tr_strv_sep(&sv, &item, ",;"sv))
+        {
+            auto addr = tr_strv_strip(item);
+            if (auto parsed = tr_address::from_string(addr); parsed)
+            {
+                auto [it, inserted] = ret.emplace(parsed->type, *parsed);
+                if (!inserted)
+                {
+                    tr_logAddWarn(fmt::format("The {key:?} setting contains more than one {type} address: discarding {old}",
+                        fmt::arg("key", tr_quark_get_string_view(TR_KEY_announce_ip)),
+                        fmt::arg("type", tr_ip_protocol_to_sv(parsed->type)),
+                        fmt::arg("old", it->second.display_name())));
+                }
+                it->second = *parsed;
+            }
+            else
+            {
+                tr_logAddWarn(fmt::format("The {key:?} setting contains an invalid entry: {item:?}",
+                    fmt::arg("key", tr_quark_get_string_view(TR_KEY_announce_ip)),
+                    fmt::arg("item", item)));
+            }
+        }
+        std::swap(ret, *tgt);
+        return true;
+    }
+    return false;
+}
+
+tr_variant from_announce_ip(std::map<tr_address_type, tr_address> const& val)
+{
+    auto out = std::string{};
+    out.reserve(val.size() * (tr_address::MAX_ADDRSTRLEN + 1));
+
+    for (auto const& [_, addr] : val)
+    {
+        if (!out.empty())
+        {
+            out.push_back(';');
+        }
+        auto buf = std::array<char, tr_address::MAX_ADDRSTRLEN>{};
+        auto addr_sv = addr.display_name(buf.data(), buf.max_size());
+        out.append(addr_sv);
+    }
+
+    return tr_variant{ std::move(out) };
+}
+
 } // unnamed namespace
 
 void Converters::ensure_default_converters()
@@ -564,6 +619,7 @@ void Converters::ensure_default_converters()
             Converters::add(to_string, from_string);
             Converters::add(to_uint64, from_uint64);
             Converters::add(to_verify_added_mode, from_verify_added_mode);
+            Converters::add(to_announce_ip, from_announce_ip);
         });
 }
 
