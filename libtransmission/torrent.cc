@@ -1090,6 +1090,24 @@ tr_torrent* tr_torrentNew(tr_ctor* ctor, tr_torrent** setme_duplicate_of)
     return tor;
 }
 
+// --- Merging
+
+void tr_torrent::merge_stats_from(tr_torrent const& src)
+{
+    TR_ASSERT(&src != this);
+
+    bytes_corrupt_.add_prev(src.bytes_corrupt_.ever());
+    bytes_downloaded_.add_prev(src.bytes_downloaded_.ever());
+    bytes_uploaded_.add_prev(src.bytes_uploaded_.ever());
+
+    auto const now = tr_time();
+    seconds_downloading_before_current_start_ += src.seconds_downloading(now);
+    seconds_seeding_before_current_start_ += src.seconds_seeding(now);
+
+    set_dirty();
+    mark_changed();
+}
+
 // --- Location
 
 void tr_torrent::set_location_in_session_thread(std::string_view const path, bool move_from_old_path, int volatile* setme_state)

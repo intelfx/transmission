@@ -138,6 +138,11 @@ struct tr_torrent
             prev_ = count;
         }
 
+        constexpr void add_prev(uint64_t count) noexcept
+        {
+            prev_ += count;
+        }
+
     private:
         uint64_t prev_ = {};
         uint64_t cur_ = {};
@@ -185,6 +190,9 @@ struct tr_torrent
         std::string_view newname,
         tr_torrent_rename_done_func&& callback,
         void* callback_user_data);
+
+    // Adds `src`'s transfer and time counters to this torrent's.
+    void merge_stats_from(tr_torrent const& src);
 
     // these functions should become private when possible,
     // but more refactoring is needed before that can happen
