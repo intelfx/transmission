@@ -113,6 +113,7 @@ public:
         LPD_ENABLED,
         PORT_FORWARDING,
         PREALLOCATION,
+        PROXY_RULES,
         RATIO,
         RATIO_ENABLED,
         RENAME_PARTIAL_FILES,

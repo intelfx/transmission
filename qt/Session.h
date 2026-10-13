@@ -16,6 +16,7 @@
 #include <QString>
 #include <QStringList>
 #include <QTimer>
+#include <QVersionNumber>
 
 #include <libtransmission/transmission.h>
 #include <libtransmission/quark.h>
@@ -66,6 +67,11 @@ public:
     [[nodiscard]] constexpr auto const& sessionVersion() const noexcept
     {
         return session_version_;
+    }
+
+    [[nodiscard]] auto const& rpcVersion() const noexcept
+    {
+        return rpc_version_;
     }
 
     [[nodiscard]] constexpr auto blocklistSize() const noexcept
@@ -190,6 +196,7 @@ private:
     tr_session_stats stats_ = EmptyStats;
     tr_session_stats cumulative_stats_ = EmptyStats;
     QString session_version_;
+    QVersionNumber rpc_version_;
     QString session_id_;
     bool is_definitely_local_session_ = true;
     RpcClient rpc_;

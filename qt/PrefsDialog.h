@@ -66,6 +66,7 @@ private:
     void portTestSetEnabled();
     void linkWidgetToPref(QWidget* widget, int pref_key);
     void updateBlocklistLabel();
+    void updateProxyRulesAvailability();
     void updateDownloadingWidgetsLocality();
     void updatePortStatusLabel();
     void updateSeedingWidgetsLocality();

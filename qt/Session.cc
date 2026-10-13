@@ -199,6 +199,7 @@ void Session::updatePref(int key)
         case Prefs::QUEUE_STALLED_MINUTES:
         case Prefs::PEX_ENABLED:
         case Prefs::PORT_FORWARDING:
+        case Prefs::PROXY_RULES:
         case Prefs::RENAME_PARTIAL_FILES:
         case Prefs::SCRIPT_TORRENT_DONE_ENABLED:
         case Prefs::SCRIPT_TORRENT_DONE_FILENAME:
@@ -974,6 +975,11 @@ void Session::updateInfo(tr_variant* args_dict)
     if (auto const str = dictFind<QString>(args_dict, TR_KEY_version); str)
     {
         session_version_ = *str;
+    }
+
+    if (auto const str = dictFind<QString>(args_dict, TR_KEY_rpc_version_semver); str)
+    {
+        rpc_version_ = QVersionNumber::fromString(*str);
     }
 
     if (auto const str = dictFind<QString>(args_dict, TR_KEY_session_id))

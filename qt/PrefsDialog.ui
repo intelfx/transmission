@@ -827,6 +827,41 @@ To add a new primary URL, add it after a blank line.</string>
         </widget>
        </item>
        <item>
+        <widget class="QGroupBox" name="proxyRulesSection">
+         <property name="title">
+          <string>Proxies</string>
+         </property>
+         <layout class="QVBoxLayout" name="proxyRulesSectionLayout">
+          <item>
+           <widget class="QPlainTextEdit" name="proxyRulesPlainTextEdit">
+            <property name="toolTip">
+             <string>Proxies to use for trackers and other web requests, one rule per line:
+&lt;pattern&gt; &lt;proxy&gt;
+
+The pattern is matched against the full URL, with &quot;*&quot; and &quot;?&quot; as wildcards.
+The proxy is a URL like socks5h://127.0.0.1:9050, or &quot;direct&quot; to not use a proxy.
+The first matching rule wins. Use &quot;*&quot; as the pattern to match everything else.
+
+UDP trackers can only be reached through socks5:// and socks5h:// proxies.</string>
+            </property>
+            <property name="tabChangesFocus">
+             <bool>true</bool>
+            </property>
+            <property name="lineWrapMode">
+             <enum>QPlainTextEdit::NoWrap</enum>
+            </property>
+            <property name="placeholderText">
+             <string notr="true">*.onion/*  socks5h://127.0.0.1:9050</string>
+            </property>
+            <property name="plainText">
+             <string notr="true"/>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
         <spacer name="networkTabBottomSpacer">
          <property name="orientation">
           <enum>Qt::Vertical</enum>

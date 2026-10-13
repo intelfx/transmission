@@ -150,6 +150,7 @@ std::array<Prefs::PrefItem, Prefs::PREFS_COUNT> const Prefs::Items{
     { LPD_ENABLED, TR_KEY_lpd_enabled, QMetaType::Bool },
     { PORT_FORWARDING, TR_KEY_port_forwarding_enabled, QMetaType::Bool },
     { PREALLOCATION, TR_KEY_preallocation, QMetaType::Int },
+    { PROXY_RULES, TR_KEY_proxy_rules, QMetaType::QString },
     { RATIO, TR_KEY_ratio_limit, QMetaType::Double },
     { RATIO_ENABLED, TR_KEY_ratio_limit_enabled, QMetaType::Bool },
     { RENAME_PARTIAL_FILES, TR_KEY_rename_partial_files, QMetaType::Bool },

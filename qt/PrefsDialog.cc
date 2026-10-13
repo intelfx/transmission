@@ -29,6 +29,7 @@
 #include <QTimeEdit>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QVersionNumber>
 
 #include <libtransmission/transmission.h>
 
@@ -524,6 +525,8 @@ void PrefsDialog::initNetworkTab()
     linkWidgetToPref(ui_.enableDhtCheck, Prefs::DHT_ENABLED);
     linkWidgetToPref(ui_.enableLpdCheck, Prefs::LPD_ENABLED);
     linkWidgetToPref(ui_.defaultTrackersPlainTextEdit, Prefs::DEFAULT_TRACKERS);
+    linkWidgetToPref(ui_.proxyRulesPlainTextEdit, Prefs::PROXY_RULES);
+    updateProxyRulesAvailability();
 
     auto* cr = new ColumnResizer{ this };
     cr->addLayout(ui_.incomingPeersSectionLayout);
@@ -787,6 +790,15 @@ void PrefsDialog::sessionUpdated()
     }
 
     updateBlocklistLabel();
+    updateProxyRulesAvailability();
+}
+
+void PrefsDialog::updateProxyRulesAvailability()
+{
+    // `proxy_rules` was added in RPC version 6.1.0
+    static auto const MinRpcVersion = QVersionNumber{ 6, 1, 0 };
+
+    ui_.proxyRulesSection->setVisible(session_.rpcVersion() >= MinRpcVersion);
 }
 
 void PrefsDialog::updateBlocklistLabel()
