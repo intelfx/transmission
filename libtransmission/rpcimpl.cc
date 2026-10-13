@@ -417,6 +417,68 @@ void notifyBatchQueueChange(tr_session* session, std::vector<tr_torrent*> const&
     return { JsonRpc::Error::SUCCESS, {} };
 }
 
+[[nodiscard]] std::pair<JsonRpc::Error::Code, std::string> torrentMerge(
+    tr_session* session,
+    tr_variant::Map const& args_in,
+    tr_variant::Map& /*args_out*/)
+{
+    using namespace JsonRpc;
+
+    // without `ids`, getTorrents() would return every torrent
+    if (args_in.find(TR_KEY_ids) == std::end(args_in))
+    {
+        return { Error::INVALID_PARAMS, "no source torrents"s };
+    }
+
+    auto sources = getTorrents(session, args_in);
+    std::sort(std::begin(sources), std::end(sources));
+    sources.erase(std::unique(std::begin(sources), std::end(sources)), std::end(sources));
+    if (std::empty(sources))
+    {
+        return { Error::INVALID_PARAMS, "no source torrents"s };
+    }
+
+    tr_torrent* target = nullptr;
+    if (auto const id = args_in.value_if<int64_t>(TR_KEY_target))
+    {
+        target = session->torrents().get(*id);
+    }
+    else if (auto const hash = args_in.value_if<std::string_view>(TR_KEY_target))
+    {
+        target = session->torrents().get(*hash);
+    }
+
+    if (target == nullptr)
+    {
+        return { Error::INVALID_PARAMS, "no target torrent"s };
+    }
+
+    if (std::find(std::begin(sources), std::end(sources), target) != std::end(sources))
+    {
+        return { Error::INVALID_PARAMS, "target torrent is also a source torrent"s };
+    }
+
+    for (auto const* const tor : sources)
+    {
+        target->merge_stats_from(*tor);
+    }
+
+    session->rpcNotify(TR_RPC_TORRENT_CHANGED, target);
+
+    if (args_in.value_if<bool>(TR_KEY_remove_sources).value_or(false))
+    {
+        for (auto* tor : sources)
+        {
+            if (auto const status = session->rpcNotify(TR_RPC_TORRENT_REMOVING, tor); (status & TR_RPC_NOREMOVE) == 0)
+            {
+                tr_torrentRemove(tor, false, nullptr, nullptr);
+            }
+        }
+    }
+
+    return { Error::SUCCESS, {} };
+}
+
 [[nodiscard]] std::pair<JsonRpc::Error::Code, std::string> torrentReannounce(
     tr_session* session,
     tr_variant::Map const& args_in,
@@ -2814,7 +2876,7 @@ using SessionAccessors = std::pair<SessionGetter, SessionSetter>;
 
 using SyncHandler = std::pair<JsonRpc::Error::Code, std::string> (*)(tr_session*, tr_variant::Map const&, tr_variant::Map&);
 
-auto const sync_handlers = small::max_size_map<tr_quark, std::pair<SyncHandler, bool /*has_side_effects*/>, 20U>{ {
+auto const sync_handlers = small::max_size_map<tr_quark, std::pair<SyncHandler, bool /*has_side_effects*/>, 21U>{ {
     { TR_KEY_free_space, { freeSpace, false } },
     { TR_KEY_group_get, { groupGet, false } },
     { TR_KEY_group_set, { groupSet, true } },
@@ -2827,6 +2889,7 @@ auto const sync_handlers = small::max_size_map<tr_quark, std::pair<SyncHandler, 
     { TR_KEY_session_set, { sessionSet, true } },
     { TR_KEY_session_stats, { sessionStats, false } },
     { TR_KEY_torrent_get, { torrentGet, false } },
+    { TR_KEY_torrent_merge, { torrentMerge, true } },
     { TR_KEY_torrent_reannounce, { torrentReannounce, true } },
     { TR_KEY_torrent_remove, { torrentRemove, true } },
     { TR_KEY_torrent_set, { torrentSet, true } },

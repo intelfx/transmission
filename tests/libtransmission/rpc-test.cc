@@ -829,6 +829,103 @@ TEST_F(RpcTest, torrentGet)
     tr_torrentRemove(tor, false, nullptr, nullptr);
 }
 
+TEST_F(RpcTest, torrentMerge)
+{
+    auto* const src = zeroTorrentInit(ZeroTorrentState::NoFiles);
+    ASSERT_NE(nullptr, src);
+    auto* const dst = torrentInitFromFile("ubuntu-20.04.4-desktop-amd64.iso.torrent");
+    ASSERT_NE(nullptr, dst);
+    auto const src_id = src->id();
+    auto const dst_id = dst->id();
+
+    src->bytes_corrupt_ += 1U;
+    src->bytes_downloaded_ += 20U;
+    src->bytes_uploaded_ += 300U;
+    dst->bytes_corrupt_ += 4000U;
+    dst->bytes_downloaded_ += 50000U;
+    dst->bytes_uploaded_ += 600000U;
+
+    auto const exec = [this](tr_variant::Map params)
+    {
+        auto request_map = tr_variant::Map{ 4U };
+        request_map.try_emplace(TR_KEY_jsonrpc, JsonRpc::Version);
+        request_map.try_emplace(TR_KEY_method, tr_variant::unmanaged_string(TR_KEY_torrent_merge));
+        request_map.try_emplace(TR_KEY_id, 12345);
+        request_map.try_emplace(TR_KEY_params, std::move(params));
+
+        auto request = tr_variant{ std::move(request_map) };
+        auto response = tr_variant{};
+        tr_rpc_request_exec(
+            session_,
+            request,
+            [&response](tr_session* /*session*/, tr_variant&& resp) { response = std::move(resp); });
+        auto const* const response_map = response.get_if<tr_variant::Map>();
+        EXPECT_NE(nullptr, response_map);
+        return response_map != nullptr && response_map->find_if<tr_variant::Map>(TR_KEY_result) != nullptr;
+    };
+
+    auto const make_ids = [](std::initializer_list<tr_torrent_id_t> ids)
+    {
+        auto vec = tr_variant::Vector{};
+        for (auto const id : ids)
+        {
+            vec.emplace_back(id);
+        }
+        return vec;
+    };
+
+    auto const expect_counters = [dst](uint64_t corrupt, uint64_t downloaded, uint64_t uploaded)
+    {
+        auto const* const st = tr_torrentStat(dst);
+        EXPECT_EQ(corrupt, st->corruptEver);
+        EXPECT_EQ(downloaded, st->downloadedEver);
+        EXPECT_EQ(uploaded, st->uploadedEver);
+    };
+
+    // no sources
+    auto params = tr_variant::Map{ 1U };
+    params.try_emplace(TR_KEY_target, dst_id);
+    EXPECT_FALSE(exec(std::move(params)));
+    expect_counters(4000U, 50000U, 600000U);
+
+    // target is a source
+    params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_ids, make_ids({ src_id, dst_id }));
+    params.try_emplace(TR_KEY_target, dst_id);
+    EXPECT_FALSE(exec(std::move(params)));
+    expect_counters(4000U, 50000U, 600000U);
+
+    // unknown target
+    params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_ids, src_id);
+    params.try_emplace(TR_KEY_target, dst_id + src_id);
+    EXPECT_FALSE(exec(std::move(params)));
+    expect_counters(4000U, 50000U, 600000U);
+
+    // merge, keeping the source; duplicate ids are merged once
+    auto const src_seeding = tr_torrentStat(src)->secondsSeeding;
+    auto const dst_seeding = tr_torrentStat(dst)->secondsSeeding;
+    params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_ids, make_ids({ src_id, src_id }));
+    params.try_emplace(TR_KEY_target, dst_id);
+    EXPECT_TRUE(exec(std::move(params)));
+    expect_counters(4001U, 50020U, 600300U);
+    EXPECT_EQ(src_seeding + dst_seeding, tr_torrentStat(dst)->secondsSeeding);
+    EXPECT_EQ(src, session_->torrents().get(src_id));
+
+    // merge by hash, removing the source
+    params = tr_variant::Map{ 3U };
+    params.try_emplace(TR_KEY_ids, src_id);
+    params.try_emplace(TR_KEY_target, dst->info_hash_string().sv());
+    params.try_emplace(TR_KEY_remove_sources, true);
+    EXPECT_TRUE(exec(std::move(params)));
+    expect_counters(4002U, 50040U, 600600U);
+    EXPECT_TRUE(waitFor([this, src_id]() { return session_->torrents().get(src_id) == nullptr; }, 5s));
+
+    // cleanup
+    tr_torrentRemove(dst, false, nullptr, nullptr);
+}
+
 TEST_F(RpcTest, torrentGetLegacy)
 {
     auto* tor = zeroTorrentInit(ZeroTorrentState::NoFiles);

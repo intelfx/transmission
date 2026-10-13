@@ -556,6 +556,25 @@ Request parameters:
 
 Response parameters: `path`, `name`, and `id`, holding the torrent ID integer
 
+### 3.8 Merging torrents' statistics
+Method name: `torrent_merge`
+
+Adds the statistics of the source torrents to the target torrent, e.g. to carry
+them over when a torrent is replaced by an updated version of it. The merged
+statistics are `downloaded_ever`, `uploaded_ever`, `corrupt_ever`,
+`seconds_downloading`, and `seconds_seeding`. Since `uploaded_ever` grows, the
+target torrent may reach its seed ratio limit as a result.
+
+Request parameters:
+
+| Key | Value Type | Description
+|:--|:--|:--
+| `ids` | array | the source torrent list, as described in 3.1 (required; must not include the target)
+| `target` | number or string | the target torrent's ID or hash string
+| `remove_sources` | boolean | if true, remove the source torrents without deleting their local data (default: false)
+
+Response parameters: none
+
 ## 4  Session requests
 ### 4.1 Session parameters
 | Key | Value Type | Description
@@ -1115,3 +1134,4 @@ Unreleased (`rpc_version_semver` 6.1.0, `rpc_version`: 20)
 | `session_get` | new arg `proxy_url`
 | `session_set` | new arg `proxy_rules`
 | `session_set` | new arg `proxy_url`
+| `torrent_merge` | new method

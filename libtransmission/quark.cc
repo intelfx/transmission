@@ -477,6 +477,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "remote_session_requires_authentication"sv, // qt app
     "remote_session_url_base_path"sv, // qt app
     "remote_session_username"sv, // qt app
+    "remove_sources"sv, // rpc
     "removed"sv, // rpc
     "rename-partial-files"sv, // rpc, tr_session::Settings
     "rename_partial_files"sv, // rpc, tr_session::Settings
@@ -626,6 +627,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "statusbar-stats"sv, // gtk app, qt app
     "statusbar_stats"sv, // gtk app, qt app
     "tag"sv, // rpc
+    "target"sv, // rpc
     "tcp-enabled"sv, // rpc, tr_session::Settings
     "tcp_enabled"sv, // rpc, tr_session::Settings
     "tier"sv, // rpc
@@ -663,6 +665,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "torrent_duplicate"sv, // rpc
     "torrent_file"sv, // rpc
     "torrent_get"sv, // rpc
+    "torrent_merge"sv, // rpc
     "torrent_reannounce"sv, // rpc
     "torrent_remove"sv, // rpc
     "torrent_rename_path"sv, // rpc
