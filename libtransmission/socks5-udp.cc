@@ -728,6 +728,13 @@ void tr_socks5_udp::on_udp_readable(evutil_socket_t fd, short /*what*/, void* ar
             return;
         }
 
+        // Only the relay may send us datagrams
+        if (auto const sender = tr_socket_address::from_sockaddr(reinterpret_cast<sockaddr const*>(&from));
+            !sender || !self->relay_addr_ || !(*sender == *self->relay_addr_))
+        {
+            continue;
+        }
+
         // Unwrap the SOCKS5 UDP header to get the real source and payload
         auto orig_from = sockaddr_storage{};
         auto orig_fromlen = socklen_t{};

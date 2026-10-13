@@ -507,6 +507,44 @@ TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
     EXPECT_FALSE(client.is_ready());
 }
 
+TEST_F(Socks5UdpTest, ignoresDatagramsNotFromRelay)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get() };
+    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+
+    auto incoming_called = false;
+    client.set_incoming_callback(
+        [&incoming_called](uint8_t const* /*payload*/, size_t /*payload_len*/, sockaddr const* /*from*/, socklen_t /*fromlen*/)
+        { incoming_called = true; });
+
+    // a well-formed SOCKS5 UDP datagram, but sent by someone other than the relay
+    auto const spoofed_source = tr_socket_address{ *tr_address::from_string("203.0.113.9"sv), tr_port::from_host(6969) };
+    auto const [spoofed_sockaddr, spoofed_sockaddr_len] = spoofed_source.to_sockaddr();
+    auto const packet = makeSocks5UdpPacket(reinterpret_cast<sockaddr const*>(&spoofed_sockaddr), { 0x01, 0x02 });
+
+    auto const client_address = localSocketAddress(client.relay_socket());
+    ASSERT_TRUE(client_address);
+    auto const [client_sockaddr, client_sockaddr_len] = client_address->to_sockaddr();
+
+    auto const sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ASSERT_NE(sock, TR_BAD_SOCKET);
+    auto const n_sent = sendto(
+        sock,
+        reinterpret_cast<char const*>(std::data(packet)),
+        std::size(packet),
+        0,
+        reinterpret_cast<sockaddr const*>(&client_sockaddr),
+        client_sockaddr_len);
+    EXPECT_EQ(std::size(packet), static_cast<size_t>(n_sent));
+    tr_net_close_socket(sock);
+
+    EXPECT_FALSE(libtransmission::test::waitFor(evbase.get(), [&incoming_called]() { return incoming_called; }, 200ms));
+}
+
 TEST_F(Socks5UdpTest, reconnectsAfterTcpControlClose)
 {
     auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
