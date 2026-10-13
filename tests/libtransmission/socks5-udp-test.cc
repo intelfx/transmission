@@ -497,6 +497,17 @@ TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
     EXPECT_FALSE(client.is_ready());
 }
 
+TEST_F(Socks5UdpTest, resolvesProxyHostname)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get() };
+    auto client = tr_socks5_udp{ evbase.get(), "localhost"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+
+    EXPECT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+}
+
 TEST_F(Socks5UdpTest, canDestructWhileResolving)
 {
     auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };

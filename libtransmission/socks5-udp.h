@@ -100,7 +100,7 @@ public:
 private:
     struct DnsResult
     {
-        std::optional<tr_socket_address> address;
+        std::vector<tr_socket_address> addresses;
         std::string error;
     };
 
@@ -108,7 +108,8 @@ private:
 
     void start_connect();
     void poll_dns();
-    void connect_to(tr_socket_address const& proxy_address);
+    void connect_next();
+    void on_connect_failed(std::string_view msg);
     void schedule_timer(std::chrono::milliseconds delay);
     void do_connect(sockaddr const* sa, socklen_t salen);
     void on_tcp_writable();
@@ -144,6 +145,7 @@ private:
     int proxy_family_ = AF_UNSPEC;
 
     std::optional<std::future<DnsResult>> pending_dns_;
+    std::vector<tr_socket_address> proxy_candidates_;
     libtransmission::evhelpers::event_unique_ptr timer_;
 
     std::vector<uint8_t> tcp_write_buf_;

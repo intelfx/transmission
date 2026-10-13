@@ -32,6 +32,7 @@
 #include "libtransmission/log.h"
 #include "libtransmission/net.h"
 #include "libtransmission/socks5-udp.h"
+#include "libtransmission/tr-assert.h"
 #include "libtransmission/utils.h"
 
 using namespace std::literals;
@@ -87,7 +88,8 @@ void tr_socks5_udp::start_connect()
     if (auto const addr = tr_address::from_string(proxy_host_); addr)
     {
         // Numeric IP — skip DNS entirely
-        connect_to(tr_socket_address{ *addr, tr_port::from_host(proxy_port_) });
+        proxy_candidates_ = { tr_socket_address{ *addr, tr_port::from_host(proxy_port_) } };
+        connect_next();
         return;
     }
 
@@ -115,15 +117,21 @@ tr_socks5_udp::DnsResult tr_socks5_udp::resolve(std::string const& host, uint16_
 
     auto const info_guard = std::unique_ptr<addrinfo, decltype(&freeaddrinfo)>{ info, freeaddrinfo };
 
+    auto ret = DnsResult{};
     for (auto const* cur = info; cur != nullptr; cur = cur->ai_next)
     {
         if (auto const socket_address = tr_socket_address::from_sockaddr(cur->ai_addr); socket_address)
         {
-            return { socket_address, {} };
+            ret.addresses.emplace_back(*socket_address);
         }
     }
 
-    return { {}, "no usable address"s };
+    if (std::empty(ret.addresses))
+    {
+        ret.error = "no usable address"s;
+    }
+
+    return ret;
 }
 
 void tr_socks5_udp::poll_dns()
@@ -137,17 +145,23 @@ void tr_socks5_udp::poll_dns()
     auto const result = pending_dns_->get();
     pending_dns_.reset();
 
-    if (!result.address)
+    if (std::empty(result.addresses))
     {
         set_error(fmt::format("SOCKS5: DNS lookup failed for {}:{} — {}", proxy_host_, proxy_port_, result.error));
         return;
     }
 
-    connect_to(*result.address);
+    proxy_candidates_ = result.addresses;
+    connect_next();
 }
 
-void tr_socks5_udp::connect_to(tr_socket_address const& proxy_address)
+void tr_socks5_udp::connect_next()
 {
+    TR_ASSERT(!std::empty(proxy_candidates_));
+
+    auto const proxy_address = proxy_candidates_.front();
+    proxy_candidates_.erase(std::begin(proxy_candidates_));
+
     proxy_addr_ = proxy_address.address();
     proxy_family_ = tr_ip_protocol_to_af(proxy_address.address().type);
     state_ = State::Connecting;
@@ -198,7 +212,7 @@ void tr_socks5_udp::do_connect(sockaddr const* sa, socklen_t salen)
 #endif
         sockerrno != EINPROGRESS)
     {
-        set_error(fmt::format("SOCKS5: connect() failed — {}", tr_strerror(sockerrno)));
+        on_connect_failed(fmt::format("SOCKS5: connect() failed — {}", tr_strerror(sockerrno)));
         return;
     }
 
@@ -211,6 +225,23 @@ void tr_socks5_udp::do_connect(sockaddr const* sa, socklen_t salen)
         // Already connected (e.g. loopback)
         send_greeting();
     }
+}
+
+void tr_socks5_udp::on_connect_failed(std::string_view msg)
+{
+    if (std::empty(proxy_candidates_))
+    {
+        set_error(msg);
+        return;
+    }
+
+    tr_logAddDebug(fmt::format("{} (trying next address)", msg));
+
+    tcp_event_.reset();
+    tr_net_close_socket(tcp_socket_);
+    tcp_socket_ = TR_BAD_SOCKET;
+
+    connect_next();
 }
 
 //  libevent callback
@@ -245,7 +276,7 @@ void tr_socks5_udp::on_tcp_writable()
         socklen_t errlen = sizeof(err);
         if (getsockopt(tcp_socket_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &errlen) != 0 || err != 0)
         {
-            set_error(fmt::format("SOCKS5: TCP connect failed — {}", tr_strerror(err != 0 ? err : sockerrno)));
+            on_connect_failed(fmt::format("SOCKS5: TCP connect failed — {}", tr_strerror(err != 0 ? err : sockerrno)));
             return;
         }
 
