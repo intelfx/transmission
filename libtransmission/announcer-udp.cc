@@ -474,7 +474,9 @@ struct tau_tracker
 
         if (mediator_.udp_route().type == Mediator::UdpRoute::Type::Blocked)
         {
-            fail_all(false, false, _("Can't reach UDP tracker through the configured proxy"));
+            auto const errmsg = _("Can't reach UDP tracker through the configured proxy");
+            logwarn(log_name(), errmsg);
+            fail_all(false, false, errmsg);
             return;
         }
 
