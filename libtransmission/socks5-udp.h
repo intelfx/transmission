@@ -29,6 +29,7 @@
 #include <event2/util.h>
 
 #include "libtransmission/net.h"
+#include "libtransmission/proxy-url.h"
 #include "libtransmission/utils-ev.h"
 
 struct event_base;
@@ -57,12 +58,7 @@ public:
     using IncomingCallback = std::function<
         void(uint8_t const* payload, size_t payload_len, sockaddr const* from, socklen_t fromlen)>;
 
-    tr_socks5_udp(
-        struct event_base* base,
-        std::string_view proxy_host,
-        uint16_t proxy_port,
-        ReadyCallback on_ready,
-        SourceAddressFunc source_address = {});
+    tr_socks5_udp(struct event_base* base, tr_proxy_url proxy, ReadyCallback on_ready, SourceAddressFunc source_address = {});
     ~tr_socks5_udp();
 
     tr_socks5_udp(tr_socks5_udp const&) = delete;
@@ -135,8 +131,7 @@ private:
     static void on_timer(evutil_socket_t fd, short what, void* arg);
 
     struct event_base* base_;
-    std::string proxy_host_;
-    uint16_t proxy_port_;
+    tr_proxy_url const proxy_;
     ReadyCallback on_ready_;
     SourceAddressFunc source_address_;
     IncomingCallback on_incoming_;

@@ -57,13 +57,11 @@ constexpr uint8_t Socks5ReplySuccess = 0x00;
 
 tr_socks5_udp::tr_socks5_udp(
     struct event_base* base,
-    std::string_view proxy_host,
-    uint16_t proxy_port,
+    tr_proxy_url proxy,
     ReadyCallback on_ready,
     SourceAddressFunc source_address)
     : base_{ base }
-    , proxy_host_{ proxy_host }
-    , proxy_port_{ proxy_port }
+    , proxy_{ std::move(proxy) }
     , on_ready_{ std::move(on_ready) }
     , source_address_{ std::move(source_address) }
     , timer_{ evtimer_new(base, on_timer, this) }
@@ -81,17 +79,17 @@ tr_socks5_udp::~tr_socks5_udp()
 
 void tr_socks5_udp::start_connect()
 {
-    if (auto const addr = tr_address::from_string(proxy_host_); addr)
+    if (auto const addr = tr_address::from_string(proxy_.host); addr)
     {
         // Numeric IP — skip DNS entirely
-        proxy_candidates_ = { tr_socket_address{ *addr, tr_port::from_host(proxy_port_) } };
+        proxy_candidates_ = { tr_socket_address{ *addr, tr_port::from_host(proxy_.port) } };
         connect_next();
         return;
     }
 
     // Hostname — resolve it off the event loop thread and poll for the result
     state_ = State::Resolving;
-    pending_dns_ = std::async(std::launch::async, resolve, proxy_host_, proxy_port_);
+    pending_dns_ = std::async(std::launch::async, resolve, proxy_.host, proxy_.port);
     schedule_timer(DnsPollInterval);
 }
 
@@ -143,7 +141,7 @@ void tr_socks5_udp::poll_dns()
 
     if (std::empty(result.addresses))
     {
-        set_error(fmt::format("SOCKS5: DNS lookup failed for {}:{} — {}", proxy_host_, proxy_port_, result.error));
+        set_error(fmt::format("SOCKS5: DNS lookup failed for {}:{} — {}", proxy_.host, proxy_.port, result.error));
         return;
     }
 

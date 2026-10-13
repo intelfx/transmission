@@ -25,6 +25,7 @@
 #include <event2/util.h>
 
 #include <libtransmission/net.h>
+#include <libtransmission/proxy-url.h>
 #include <libtransmission/socks5-udp.h>
 #include <libtransmission/utils-ev.h>
 
@@ -49,6 +50,15 @@ void closeSocket(tr_socket_t& socket)
         tr_net_close_socket(socket);
         socket = TR_BAD_SOCKET;
     }
+}
+
+[[nodiscard]] tr_proxy_url makeSocks5ProxyUrl(std::string_view host, uint16_t port)
+{
+    auto ret = tr_proxy_url{};
+    ret.scheme = tr_proxy_url::Scheme::Socks5;
+    ret.host = host;
+    ret.port = port;
+    return ret;
 }
 
 [[nodiscard]] std::optional<tr_socket_address> localSocketAddress(tr_socket_t socket)
@@ -436,7 +446,9 @@ TEST_F(Socks5UdpTest, proxiesUdpDatagramsThroughMockServer)
 
     auto server = MockSocks5UdpServer{ evbase.get() };
     auto client_ready = false;
-    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), [&client_ready]() { client_ready = true; } };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
+                                 [&client_ready]() { client_ready = true; } };
 
     ASSERT_TRUE(
         libtransmission::test::waitFor(
@@ -499,7 +511,9 @@ TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
-    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
+                                 tr_socks5_udp::ReadyCallback{} };
 
     ASSERT_TRUE(
         libtransmission::test::waitFor(
@@ -521,8 +535,7 @@ TEST_F(Socks5UdpTest, bindsToSourceAddress)
     auto const loopback = *tr_address::from_string("127.0.0.1"sv);
     auto server = MockSocks5UdpServer{ evbase.get() };
     auto client = tr_socks5_udp{ evbase.get(),
-                                 "127.0.0.1"sv,
-                                 server.tcp_port(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
                                  tr_socks5_udp::ReadyCallback{},
                                  [&loopback](tr_address_type type)
                                  { return type == TR_AF_INET ? loopback : tr_address::any(type); } };
@@ -539,7 +552,9 @@ TEST_F(Socks5UdpTest, ignoresDatagramsNotFromRelay)
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
-    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
+                                 tr_socks5_udp::ReadyCallback{} };
     ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
 
     auto incoming_called = false;
@@ -577,7 +592,9 @@ TEST_F(Socks5UdpTest, ignoresTcpControlDataAfterAssociate)
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
-    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
+                                 tr_socks5_udp::ReadyCallback{} };
     ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
 
     // more than the client's handshake buffer
@@ -595,7 +612,9 @@ TEST_F(Socks5UdpTest, reconnectsAfterTcpControlClose)
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
-    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
+                                 tr_socks5_udp::ReadyCallback{} };
 
     ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
     EXPECT_EQ(1U, server.n_udp_associates());
@@ -616,7 +635,9 @@ TEST_F(Socks5UdpTest, resolvesProxyHostname)
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
-    auto client = tr_socks5_udp{ evbase.get(), "localhost"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("localhost"sv, server.tcp_port()),
+                                 tr_socks5_udp::ReadyCallback{} };
 
     EXPECT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
 }
@@ -627,7 +648,7 @@ TEST_F(Socks5UdpTest, canDestructWhileResolving)
     ASSERT_NE(evbase.get(), nullptr);
 
     {
-        auto client = tr_socks5_udp{ evbase.get(), "localhost"sv, 1080U, tr_socks5_udp::ReadyCallback{} };
+        auto client = tr_socks5_udp{ evbase.get(), makeSocks5ProxyUrl("localhost"sv, 1080U), tr_socks5_udp::ReadyCallback{} };
         EXPECT_EQ(tr_socks5_udp::State::Resolving, client.state());
     }
 

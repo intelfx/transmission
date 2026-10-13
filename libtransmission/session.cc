@@ -915,8 +915,7 @@ void tr_session::setSettings(tr_session::Settings&& settings_in, bool force)
         {
             socks5_udp_ = std::make_unique<tr_socks5_udp>(
                 event_base(),
-                parsed->host,
-                parsed->port,
+                *parsed,
                 tr_socks5_udp::ReadyCallback{},
                 [this](tr_address_type type) { return bind_address(type); });
 

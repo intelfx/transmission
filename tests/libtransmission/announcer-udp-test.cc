@@ -33,6 +33,7 @@
 #include <libtransmission/crypto-utils.h> // for tr_rand_obj()
 #include <libtransmission/net.h>
 #include <libtransmission/peer-mgr.h> // for tr_pex
+#include <libtransmission/proxy-url.h>
 #include <libtransmission/session.h> // tr_peerIdInit
 #include <libtransmission/socks5-udp.h>
 #include "libtransmission/timer.h"
@@ -469,12 +470,13 @@ TEST_F(AnnouncerUdpTest, canScrape)
 
 TEST_F(AnnouncerUdpTest, doesNotLeakDirectUdpWhenSocks5RelayIsNotReady)
 {
+    auto proxy_url = tr_proxy_url{};
+    proxy_url.scheme = tr_proxy_url::Scheme::Socks5;
+    proxy_url.host = "127.0.0.1"sv;
+    proxy_url.port = 1U;
+
     auto mediator = MockMediator{};
-    mediator.socks5_udp_ = std::make_unique<tr_socks5_udp>(
-        mediator.eventBase(),
-        "127.0.0.1"sv,
-        uint16_t{ 1 },
-        tr_socks5_udp::ReadyCallback{});
+    mediator.socks5_udp_ = std::make_unique<tr_socks5_udp>(mediator.eventBase(), proxy_url, tr_socks5_udp::ReadyCallback{});
 
     auto announcer = tr_announcer_udp::create(mediator);
     auto upkeep_timer = createUpkeepTimer(mediator, announcer);
