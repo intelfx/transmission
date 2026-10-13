@@ -75,8 +75,6 @@ public:
         on_incoming_ = std::move(cb);
     }
 
-    [[nodiscard]] std::optional<tr_socket_address> relay_address() const noexcept;
-
     [[nodiscard]] State state() const noexcept
     {
         return state_;

@@ -811,10 +811,3 @@ void tr_socks5_udp::close_connection()
     tcp_write_sent_ = 0;
     tcp_buf_used_ = 0;
 }
-
-//  Helper
-
-std::optional<tr_socket_address> tr_socks5_udp::relay_address() const noexcept
-{
-    return relay_addr_;
-}
