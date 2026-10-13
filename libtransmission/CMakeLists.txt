@@ -103,6 +103,8 @@ target_sources(${TR_NAME}
         port-forwarding-upnp.h
         port-forwarding.cc
         port-forwarding.h
+        proxy-url.cc
+        proxy-url.h
         quark.cc
         quark.h
         resume.cc

@@ -43,6 +43,7 @@
 #include "libtransmission/peer-mgr.h"
 #include "libtransmission/peer-socket.h"
 #include "libtransmission/port-forwarding.h"
+#include "libtransmission/proxy-url.h"
 #include "libtransmission/quark.h"
 #include "libtransmission/rpc-server.h"
 #include "libtransmission/session.h"
@@ -60,7 +61,6 @@
 #include "libtransmission/variant.h"
 #include "libtransmission/version.h"
 #include "libtransmission/web.h"
-#include "libtransmission/web-utils.h"
 
 struct tr_ctor;
 
@@ -883,32 +883,28 @@ void tr_session::setSettings(tr_session::Settings&& settings_in, bool force)
         udp_core_ = std::make_unique<tr_session::tr_udp_core>(*this, udpPort());
     }
 
-    // Initialize SOCKS5 UDP relay if proxy_url points to a socks5:// proxy
+    // Initialize SOCKS5 UDP relay if proxy_url points to a SOCKS5 proxy
     if (auto const& proxy_url = new_settings.proxy_url; force || proxy_url != old_settings.proxy_url)
     {
         socks5_udp_.reset();
 
-        if (proxy_url && tr_strv_starts_with(*proxy_url, "socks5://"sv))
+        if (auto const parsed = proxy_url ? tr_proxy_url::parse(*proxy_url) : std::nullopt; parsed && parsed->supports_udp())
         {
-            // Parse host:port from socks5://host:port
-            if (auto const parsed = tr_urlParse(*proxy_url); parsed)
-            {
-                socks5_udp_ = std::make_unique<tr_socks5_udp>(
-                    event_base(),
-                    parsed->host,
-                    parsed->port != 0 ? parsed->port : uint16_t{ 1080 },
-                    tr_socks5_udp::ReadyCallback{});
+            socks5_udp_ = std::make_unique<tr_socks5_udp>(
+                event_base(),
+                parsed->host,
+                parsed->port,
+                tr_socks5_udp::ReadyCallback{});
 
-                // Route incoming relay packets to the UDP announcer
-                socks5_udp_->set_incoming_callback(
-                    [this](uint8_t const* payload, size_t payload_len, sockaddr const* from, socklen_t fromlen)
+            // Route incoming relay packets to the UDP announcer
+            socks5_udp_->set_incoming_callback(
+                [this](uint8_t const* payload, size_t payload_len, sockaddr const* from, socklen_t fromlen)
+                {
+                    if (announcer_udp_)
                     {
-                        if (announcer_udp_)
-                        {
-                            announcer_udp_->handle_message(payload, payload_len, from, fromlen);
-                        }
-                    });
-            }
+                        announcer_udp_->handle_message(payload, payload_len, from, fromlen);
+                    }
+                });
         }
     }
 
