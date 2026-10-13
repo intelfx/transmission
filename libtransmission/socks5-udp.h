@@ -119,6 +119,7 @@ private:
     void handle_greeting_response();
     void handle_udp_associate_response();
     void set_error(std::string_view msg);
+    void close_connection();
     void setup_udp_read_event();
     void queue_tcp_write(uint8_t const* data, size_t len);
     void flush_pending_write();
@@ -153,6 +154,10 @@ private:
     State pending_state_ = State::Idle;
 
     static constexpr auto DnsPollInterval = std::chrono::milliseconds{ 100 };
+    static constexpr auto ReconnectInitialDelay = std::chrono::milliseconds{ 1000 };
+    static constexpr auto ReconnectMaxDelay = std::chrono::milliseconds{ 300000 };
+    unsigned n_failures_ = 0U;
+
     static constexpr size_t kTcpBufSize = 512;
     uint8_t tcp_buf_[kTcpBufSize] = {};
     size_t tcp_buf_used_ = 0;

@@ -135,6 +135,11 @@ public:
         return got_udp_associate_;
     }
 
+    [[nodiscard]] size_t n_udp_associates() const noexcept
+    {
+        return n_udp_associates_;
+    }
+
     [[nodiscard]] bool got_udp_datagram() const noexcept
     {
         return got_udp_datagram_;
@@ -232,6 +237,9 @@ private:
 
         closeSocket(tcp_client_socket_);
         tcp_client_socket_ = socket;
+        tcp_buffer_.clear();
+        got_greeting_ = false;
+        got_udp_associate_ = false;
         ASSERT_EQ(evutil_make_socket_nonblocking(tcp_client_socket_), 0);
 
         tcp_client_event_.reset(event_new(base_, tcp_client_socket_, EV_READ | EV_PERSIST, onTcpReadable, this));
@@ -325,6 +333,7 @@ private:
 
             tcp_buffer_.erase(std::begin(tcp_buffer_), std::begin(tcp_buffer_) + 10);
             got_udp_associate_ = true;
+            ++n_udp_associates_;
         }
     }
 
@@ -399,6 +408,7 @@ private:
     bool got_greeting_ = false;
     bool got_udp_associate_ = false;
     bool got_udp_datagram_ = false;
+    size_t n_udp_associates_ = 0U;
 
     std::vector<uint8_t> tcp_buffer_;
     std::optional<tr_socket_address> associate_destination_;
@@ -495,6 +505,27 @@ TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
     EXPECT_TRUE(
         libtransmission::test::waitFor(evbase.get(), [&client]() { return client.state() == tr_socks5_udp::State::Error; }));
     EXPECT_FALSE(client.is_ready());
+}
+
+TEST_F(Socks5UdpTest, reconnectsAfterTcpControlClose)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get() };
+    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+
+    ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+    EXPECT_EQ(1U, server.n_udp_associates());
+
+    server.close_tcp_control();
+    ASSERT_TRUE(
+        libtransmission::test::waitFor(evbase.get(), [&client]() { return client.state() == tr_socks5_udp::State::Error; }));
+
+    EXPECT_TRUE(
+        libtransmission::test::waitFor(
+            evbase.get(),
+            [&client, &server]() { return client.is_ready() && server.n_udp_associates() == 2U; }));
 }
 
 TEST_F(Socks5UdpTest, resolvesProxyHostname)

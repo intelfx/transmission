@@ -3,6 +3,7 @@
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -67,18 +68,7 @@ tr_socks5_udp::tr_socks5_udp(struct event_base* base, std::string_view proxy_hos
 tr_socks5_udp::~tr_socks5_udp()
 {
     timer_.reset();
-    tcp_event_.reset();
-    udp_event_.reset();
-
-    if (tcp_socket_ != TR_BAD_SOCKET)
-    {
-        tr_net_close_socket(tcp_socket_);
-    }
-
-    if (udp_socket_ != TR_BAD_SOCKET)
-    {
-        tr_net_close_socket(udp_socket_);
-    }
+    close_connection();
 }
 
 // TCP connect to SOCKS5 proxy
@@ -187,6 +177,10 @@ void tr_socks5_udp::on_timer(evutil_socket_t /*fd*/, short /*what*/, void* arg)
     if (self->pending_dns_)
     {
         self->poll_dns();
+    }
+    else if (self->state_ == State::Error)
+    {
+        self->start_connect();
     }
 }
 
@@ -549,6 +543,7 @@ void tr_socks5_udp::handle_udp_associate_response()
     relay_addr_ = tr_socket_address{ relay_address, tr_port::from_host(relay_port) };
 
     state_ = State::Ready;
+    n_failures_ = 0U;
 
     tr_logAddInfo(fmt::format("SOCKS5: UDP relay ready at {}", relay_addr_->display_name()));
 
@@ -751,9 +746,19 @@ void tr_socks5_udp::on_udp_readable(evutil_socket_t fd, short /*what*/, void* ar
 
 void tr_socks5_udp::set_error(std::string_view msg)
 {
-    tr_logAddWarn(std::string{ msg });
+    close_connection();
     state_ = State::Error;
 
+    // retry with exponential backoff
+    auto const delay = std::min(ReconnectInitialDelay * (1U << std::min(n_failures_, 16U)), ReconnectMaxDelay);
+    ++n_failures_;
+
+    tr_logAddWarn(fmt::format("{} (retrying in {:d}s)", msg, std::chrono::duration_cast<std::chrono::seconds>(delay).count()));
+    schedule_timer(delay);
+}
+
+void tr_socks5_udp::close_connection()
+{
     tcp_event_.reset();
     udp_event_.reset();
 
@@ -768,6 +773,12 @@ void tr_socks5_udp::set_error(std::string_view msg)
         tr_net_close_socket(udp_socket_);
         udp_socket_ = TR_BAD_SOCKET;
     }
+
+    relay_addr_.reset();
+    proxy_candidates_.clear();
+    tcp_write_buf_.clear();
+    tcp_write_sent_ = 0;
+    tcp_buf_used_ = 0;
 }
 
 //  Helper
