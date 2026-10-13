@@ -52,10 +52,17 @@ public:
     };
 
     using ReadyCallback = std::function<void()>;
+    // Returns the local address to bind to for the given family; "any" for no preference
+    using SourceAddressFunc = std::function<tr_address(tr_address_type)>;
     using IncomingCallback = std::function<
         void(uint8_t const* payload, size_t payload_len, sockaddr const* from, socklen_t fromlen)>;
 
-    tr_socks5_udp(struct event_base* base, std::string_view proxy_host, uint16_t proxy_port, ReadyCallback on_ready);
+    tr_socks5_udp(
+        struct event_base* base,
+        std::string_view proxy_host,
+        uint16_t proxy_port,
+        ReadyCallback on_ready,
+        SourceAddressFunc source_address = {});
     ~tr_socks5_udp();
 
     tr_socks5_udp(tr_socks5_udp const&) = delete;
@@ -111,6 +118,7 @@ private:
     void connect_next();
     void on_connect_failed(std::string_view msg);
     void schedule_timer(std::chrono::milliseconds delay);
+    [[nodiscard]] bool bind_to_source_address(tr_socket_t sock, tr_address_type type) const;
     void do_connect(sockaddr const* sa, socklen_t salen);
     void on_tcp_writable();
     void on_tcp_readable();
@@ -132,6 +140,7 @@ private:
     std::string proxy_host_;
     uint16_t proxy_port_;
     ReadyCallback on_ready_;
+    SourceAddressFunc source_address_;
     IncomingCallback on_incoming_;
 
     State state_ = State::Idle;

@@ -917,7 +917,8 @@ void tr_session::setSettings(tr_session::Settings&& settings_in, bool force)
                 event_base(),
                 parsed->host,
                 parsed->port,
-                tr_socks5_udp::ReadyCallback{});
+                tr_socks5_udp::ReadyCallback{},
+                [this](tr_address_type type) { return bind_address(type); });
 
             // Route incoming relay packets to the UDP announcer
             socks5_udp_->set_incoming_callback(

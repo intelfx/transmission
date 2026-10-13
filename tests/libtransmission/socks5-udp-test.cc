@@ -513,6 +513,26 @@ TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
     EXPECT_FALSE(client.is_ready());
 }
 
+TEST_F(Socks5UdpTest, bindsToSourceAddress)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto const loopback = *tr_address::from_string("127.0.0.1"sv);
+    auto server = MockSocks5UdpServer{ evbase.get() };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 "127.0.0.1"sv,
+                                 server.tcp_port(),
+                                 tr_socks5_udp::ReadyCallback{},
+                                 [&loopback](tr_address_type type)
+                                 { return type == TR_AF_INET ? loopback : tr_address::any(type); } };
+    ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+
+    auto const client_address = localSocketAddress(client.relay_socket());
+    ASSERT_TRUE(client_address);
+    EXPECT_EQ(loopback, client_address->address());
+}
+
 TEST_F(Socks5UdpTest, ignoresDatagramsNotFromRelay)
 {
     auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };

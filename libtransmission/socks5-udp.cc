@@ -55,11 +55,17 @@ constexpr uint8_t Socks5ReplySuccess = 0x00;
 
 // Construction / destruction
 
-tr_socks5_udp::tr_socks5_udp(struct event_base* base, std::string_view proxy_host, uint16_t proxy_port, ReadyCallback on_ready)
+tr_socks5_udp::tr_socks5_udp(
+    struct event_base* base,
+    std::string_view proxy_host,
+    uint16_t proxy_port,
+    ReadyCallback on_ready,
+    SourceAddressFunc source_address)
     : base_{ base }
     , proxy_host_{ proxy_host }
     , proxy_port_{ proxy_port }
     , on_ready_{ std::move(on_ready) }
+    , source_address_{ std::move(source_address) }
     , timer_{ evtimer_new(base, on_timer, this) }
 {
     start_connect();
@@ -160,6 +166,13 @@ void tr_socks5_udp::connect_next()
     do_connect(reinterpret_cast<sockaddr const*>(&ss), sslen);
 }
 
+bool tr_socks5_udp::bind_to_source_address(tr_socket_t sock, tr_address_type type) const
+{
+    auto const address = source_address_ ? source_address_(type) : tr_address::any(type);
+    auto const [ss, sslen] = tr_socket_address{ address, tr_port{} }.to_sockaddr();
+    return bind(sock, reinterpret_cast<sockaddr const*>(&ss), sslen) == 0;
+}
+
 void tr_socks5_udp::schedule_timer(std::chrono::milliseconds delay)
 {
     using namespace std::chrono;
@@ -196,6 +209,12 @@ void tr_socks5_udp::do_connect(sockaddr const* sa, socklen_t salen)
     if (evutil_make_socket_nonblocking(tcp_socket_) != 0)
     {
         set_error("SOCKS5: couldn't make TCP socket non-blocking"sv);
+        return;
+    }
+
+    if (!bind_to_source_address(tcp_socket_, proxy_addr_->type))
+    {
+        on_connect_failed(fmt::format("SOCKS5: bind TCP socket failed — {}", tr_strerror(sockerrno)));
         return;
     }
 
@@ -418,9 +437,7 @@ void tr_socks5_udp::send_udp_associate()
     }
 
     // Bind to any port
-    auto const bind_address = tr_socket_address{ tr_address::any(ip_protocol), tr_port{} };
-    auto const bind_sockaddr = bind_address.to_sockaddr();
-    if (bind(udp_socket_, reinterpret_cast<sockaddr const*>(&bind_sockaddr.first), bind_sockaddr.second) != 0)
+    if (!bind_to_source_address(udp_socket_, ip_protocol))
     {
         set_error(fmt::format("SOCKS5: bind UDP socket failed — {}", tr_strerror(sockerrno)));
         return;
