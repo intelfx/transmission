@@ -16,6 +16,18 @@
 #include <string_view>
 #include <utility>
 
+// What an outgoing request is for. Proxy rules can be limited to some kinds of requests.
+enum class tr_request_kind : uint8_t
+{
+    Tracker, // announces and scrapes
+    Webseed,
+    Blocklist,
+    TorrentFile, // downloading a .torrent file to add it
+    PortCheck,
+    PublicAddress, // looking up our public IP address
+    Other,
+};
+
 class tr_web
 {
 public:
