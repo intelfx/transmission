@@ -1088,6 +1088,54 @@ To add a new primary URL, add it after a blank line.]]></property>
                         </child>
                       </object>
                     </child>
+                    <child>
+                      <object class="GtkFrame">
+                        <child type="label">
+                          <object class="GtkLabel" id="proxy_rules_section_label">
+                            <property name="label" translatable="yes">Proxies</property>
+                            <attributes>
+                              <attribute name="weight" value="bold"/>
+                            </attributes>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkGrid" id="proxy_rules_section_layout">
+                            <property name="row-spacing">6</property>
+                            <property name="column-spacing">12</property>
+                            <property name="vexpand">1</property>
+                            <child>
+                              <object class="GtkScrolledWindow" id="proxy_rules_scroll">
+                                <property name="height-request">90</property>
+                                <property name="focusable">1</property>
+                                <property name="hexpand">1</property>
+                                <property name="vexpand">1</property>
+                                <property name="has-frame">1</property>
+                                <property name="child">
+                                  <object class="GtkTextView" id="proxy_rules_view">
+                                    <property name="focusable">1</property>
+                                    <property name="accepts-tab">0</property>
+                                    <property name="tooltip-text" translatable="yes"><![CDATA[Proxies to use for trackers and other web requests, one rule per line:
+<pattern> <proxy>
+
+The pattern is matched against the full URL, with "*" and "?" as wildcards.
+The proxy is a URL like socks5h://127.0.0.1:9050, or "direct" to not use a proxy.
+The first matching rule wins. Use "*" as the pattern to match everything else.
+
+UDP trackers can only be reached through socks5:// and socks5h:// proxies.]]></property>
+                                    <property name="vexpand">1</property>
+                                  </object>
+                                </property>
+                                <layout>
+                                  <property name="column">0</property>
+                                  <property name="row">0</property>
+                                  <property name="column-span">2</property>
+                                </layout>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
                   </object>
                 </property>
                 <property name="tab">

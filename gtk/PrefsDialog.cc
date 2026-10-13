@@ -1065,6 +1065,7 @@ NetworkPage::NetworkPage(
     init_check_button("enable_dht_check", TR_KEY_dht_enabled);
     init_check_button("enable_lpd_check", TR_KEY_lpd_enabled);
     init_text_view("default_trackers_view", TR_KEY_default_trackers);
+    init_text_view("proxy_rules_view", TR_KEY_proxy_rules);
 }
 
 } // namespace

@@ -1144,6 +1144,10 @@ void Application::Impl::on_prefs_changed(tr_quark const key)
         tr_sessionSetDownloadDir(tr, gtr_pref_string_get(key).c_str());
         break;
 
+    case TR_KEY_proxy_rules:
+        tr_sessionSetProxyRules(tr, gtr_pref_string_get(key).c_str());
+        break;
+
     case TR_KEY_message_level:
         tr_logSetLevel(static_cast<tr_log_level>(gtr_pref_int_get(key)));
         break;
