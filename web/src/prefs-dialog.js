@@ -175,6 +175,28 @@ export class PrefsDialog extends EventTarget {
         element.dispatchEvent(new Event('session-change'));
       }
     }
+
+    // `proxy_rules` was added in RPC version 6.1.0
+    const has_proxy_rules = PrefsDialog._isVersionAtLeast(
+      this.session_manager.session_properties.rpc_version_semver,
+      [6, 1, 0],
+    );
+    for (const element of this.elements.network.proxy_rules_elements) {
+      element.hidden = !has_proxy_rules;
+    }
+  }
+
+  static _isVersionAtLeast(version, min) {
+    const parts = String(version ?? '')
+      .split('.')
+      .map(Number);
+    for (const [index, wanted] of min.entries()) {
+      const part = parts[index] || 0;
+      if (part !== wanted) {
+        return part > wanted;
+      }
+    }
+    return true;
   }
 
   static _createCheckAndLabel(id, text) {
@@ -741,11 +763,40 @@ export class PrefsDialog extends EventTarget {
       root.append(label);
     }
 
-    const textarea = document.createElement('textarea');
+    let textarea = document.createElement('textarea');
     textarea.dataset.key = 'default_trackers';
     textarea.id = 'default-trackers';
     root.append(textarea);
     const default_trackers_textarea = textarea;
+
+    label = document.createElement('div');
+    label.textContent = 'Proxies';
+    label.classList.add('section-label');
+    root.append(label);
+    const proxy_rules_elements = [label];
+
+    const proxy_labels = [
+      'Proxies to use for trackers and other web requests, one "<pattern> <proxy>" rule per line.',
+      'The pattern is matched against the full URL, with "*" and "?" as wildcards. The first matching rule wins.',
+      'The proxy is a URL like socks5h://127.0.0.1:9050, or "direct" to not use a proxy.',
+      'UDP trackers can only be reached through socks5:// and socks5h:// proxies.',
+    ];
+    for (const text of proxy_labels) {
+      label = document.createElement('label');
+      label.classList.add('proxy-rules-label');
+      label.textContent = text;
+      label.setAttribute('for', 'proxy-rules');
+      root.append(label);
+      proxy_rules_elements.push(label);
+    }
+
+    textarea = document.createElement('textarea');
+    textarea.dataset.key = 'proxy_rules';
+    textarea.id = 'proxy-rules';
+    textarea.placeholder = '*.onion/*  socks5h://127.0.0.1:9050';
+    root.append(textarea);
+    const proxy_rules_textarea = textarea;
+    proxy_rules_elements.push(textarea);
 
     return {
       default_trackers_textarea,
@@ -755,6 +806,8 @@ export class PrefsDialog extends EventTarget {
         ipv4: port_status_label_ipv4,
         ipv6: port_status_label_ipv6,
       },
+      proxy_rules_elements,
+      proxy_rules_textarea,
       random_port_check,
       root,
       utp_check,

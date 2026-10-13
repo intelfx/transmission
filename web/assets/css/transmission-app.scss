@@ -840,6 +840,10 @@ a {
     height: 300px;
   }
 
+  #proxy-rules {
+    height: 150px;
+  }
+
   .blocklist-size-label,
   .blocklist-update-button,
   .register-handler-button,
@@ -870,7 +874,9 @@ a {
   }
 
   #default-trackers,
-  .default-trackers-label {
+  #proxy-rules,
+  .default-trackers-label,
+  .proxy-rules-label {
     grid-column: 1 / 3;
   }
 
