@@ -376,6 +376,9 @@ void tr_sessionSetRPCPasswordEnabled(tr_session* session, bool is_enabled);
 
 void tr_sessionSetDefaultTrackers(tr_session* session, char const* trackers);
 
+/** @brief Set the rules for choosing a proxy by URL (see `proxy_rules` in settings.json) */
+void tr_sessionSetProxyRules(tr_session* session, char const* rules);
+
 enum tr_rpc_callback_type : uint8_t
 {
     TR_RPC_TORRENT_ADDED,

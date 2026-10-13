@@ -361,6 +361,13 @@ TEST_F(SessionTest, choosesProxyByRules)
     EXPECT_EQ("socks5://global.example"sv, session_->proxyUrl("https://tracker.test/announce"sv, tr_request_kind::Tracker));
 }
 
+TEST_F(SessionTest, setProxyRules)
+{
+    static auto constexpr Rules = "* socks5://127.0.0.1:1080"sv;
+    tr_sessionSetProxyRules(session_, std::string{ Rules }.c_str());
+    EXPECT_TRUE(waitFor([this]() { return session_->settings().proxy_rules.text() == Rules; }, 1000));
+}
+
 TEST_F(SessionTest, createsSocks5RelaysOnDemand)
 {
     EXPECT_EQ(nullptr, session_->socks5_relay("http://127.0.0.1:3128"sv));

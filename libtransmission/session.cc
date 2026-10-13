@@ -1867,6 +1867,14 @@ void tr_sessionSetDefaultTrackers(tr_session* session, char const* trackers)
     session->setDefaultTrackers(trackers != nullptr ? trackers : "");
 }
 
+void tr_sessionSetProxyRules(tr_session* session, char const* rules)
+{
+    TR_ASSERT(session != nullptr);
+
+    session->run_in_session_thread([session, rules = std::string{ rules != nullptr ? rules : "" }]()
+                                   { session->setProxyRules(rules); });
+}
+
 // ---
 
 tr_bandwidth& tr_session::getBandwidthGroup(std::string_view name)
