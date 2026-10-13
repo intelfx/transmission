@@ -9,9 +9,11 @@
 #error only libtransmission should #include this header.
 #endif
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,7 +26,6 @@
 #include <sys/socket.h>
 #endif
 
-#include <event2/dns.h>
 #include <event2/util.h>
 
 #include "libtransmission/net.h"
@@ -97,7 +98,18 @@ public:
         socklen_t& fromlen);
 
 private:
+    struct DnsResult
+    {
+        std::optional<tr_socket_address> address;
+        std::string error;
+    };
+
+    [[nodiscard]] static DnsResult resolve(std::string const& host, uint16_t port);
+
     void start_connect();
+    void poll_dns();
+    void connect_to(tr_socket_address const& proxy_address);
+    void schedule_timer(std::chrono::milliseconds delay);
     void do_connect(sockaddr const* sa, socklen_t salen);
     void on_tcp_writable();
     void on_tcp_readable();
@@ -112,7 +124,7 @@ private:
 
     static void on_tcp_event(evutil_socket_t fd, short what, void* arg);
     static void on_udp_readable(evutil_socket_t fd, short what, void* arg);
-    static void on_dns_result(int result, evutil_addrinfo* res, void* arg);
+    static void on_timer(evutil_socket_t fd, short what, void* arg);
 
     struct event_base* base_;
     std::string proxy_host_;
@@ -131,13 +143,14 @@ private:
     std::optional<tr_address> proxy_addr_;
     int proxy_family_ = AF_UNSPEC;
 
-    evdns_base* dns_base_ = nullptr;
-    evdns_getaddrinfo_request* dns_req_ = nullptr;
+    std::optional<std::future<DnsResult>> pending_dns_;
+    libtransmission::evhelpers::event_unique_ptr timer_;
 
     std::vector<uint8_t> tcp_write_buf_;
     size_t tcp_write_sent_ = 0;
     State pending_state_ = State::Idle;
 
+    static constexpr auto DnsPollInterval = std::chrono::milliseconds{ 100 };
     static constexpr size_t kTcpBufSize = 512;
     uint8_t tcp_buf_[kTcpBufSize] = {};
     size_t tcp_buf_used_ = 0;

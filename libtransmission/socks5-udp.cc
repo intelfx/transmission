@@ -4,9 +4,12 @@
 // License text can be found in the licenses/ folder.
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <future>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,7 +24,6 @@
 #include <unistd.h>
 #endif
 
-#include <event2/dns.h>
 #include <event2/event.h>
 #include <event2/util.h>
 
@@ -56,24 +58,14 @@ tr_socks5_udp::tr_socks5_udp(struct event_base* base, std::string_view proxy_hos
     , proxy_host_{ proxy_host }
     , proxy_port_{ proxy_port }
     , on_ready_{ std::move(on_ready) }
+    , timer_{ evtimer_new(base, on_timer, this) }
 {
     start_connect();
 }
 
 tr_socks5_udp::~tr_socks5_udp()
 {
-    if (dns_req_ != nullptr)
-    {
-        evdns_getaddrinfo_cancel(dns_req_);
-        dns_req_ = nullptr;
-    }
-
-    if (dns_base_ != nullptr)
-    {
-        evdns_base_free(dns_base_, 0);
-        dns_base_ = nullptr;
-    }
-
+    timer_.reset();
     tcp_event_.reset();
     udp_event_.reset();
 
@@ -95,69 +87,93 @@ void tr_socks5_udp::start_connect()
     if (auto const addr = tr_address::from_string(proxy_host_); addr)
     {
         // Numeric IP — skip DNS entirely
-        proxy_addr_ = *addr;
-        proxy_family_ = tr_ip_protocol_to_af(addr->type);
-        auto const socket_address = tr_socket_address{ *addr, tr_port::from_host(proxy_port_) };
-        auto const [ss, sslen] = socket_address.to_sockaddr();
-        state_ = State::Connecting;
-        do_connect(reinterpret_cast<sockaddr const*>(&ss), sslen);
+        connect_to(tr_socket_address{ *addr, tr_port::from_host(proxy_port_) });
         return;
     }
 
-    // Hostname — resolve asynchronously via evdns
+    // Hostname — resolve it off the event loop thread and poll for the result
     state_ = State::Resolving;
+    pending_dns_ = std::async(std::launch::async, resolve, proxy_host_, proxy_port_);
+    schedule_timer(DnsPollInterval);
+}
 
-    dns_base_ = evdns_base_new(base_, EVDNS_BASE_INITIALIZE_NAMESERVERS | EVDNS_BASE_DISABLE_WHEN_INACTIVE);
-    if (dns_base_ == nullptr)
-    {
-        set_error("SOCKS5: couldn't create DNS resolver"sv);
-        return;
-    }
-
-    auto hints = evutil_addrinfo{};
+tr_socks5_udp::DnsResult tr_socks5_udp::resolve(std::string const& host, uint16_t port)
+{
+    auto hints = addrinfo{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
     auto port_str = std::array<char, 16>{};
-    *fmt::format_to(std::data(port_str), "{:d}", proxy_port_) = '\0';
+    *fmt::format_to(std::data(port_str), "{:d}", port) = '\0';
 
-    dns_req_ = evdns_getaddrinfo(dns_base_, proxy_host_.c_str(), std::data(port_str), &hints, on_dns_result, this);
-    // dns_req_ is nullptr when the callback was already invoked inline (immediate error or cached result)
+    addrinfo* info = nullptr;
+    if (int const rc = getaddrinfo(host.c_str(), std::data(port_str), &hints, &info); rc != 0)
+    {
+        return { {}, gai_strerror(rc) };
+    }
+
+    auto const info_guard = std::unique_ptr<addrinfo, decltype(&freeaddrinfo)>{ info, freeaddrinfo };
+
+    for (auto const* cur = info; cur != nullptr; cur = cur->ai_next)
+    {
+        if (auto const socket_address = tr_socket_address::from_sockaddr(cur->ai_addr); socket_address)
+        {
+            return { socket_address, {} };
+        }
+    }
+
+    return { {}, "no usable address"s };
 }
 
-void tr_socks5_udp::on_dns_result(int result, evutil_addrinfo* res, void* arg)
+void tr_socks5_udp::poll_dns()
+{
+    if (pending_dns_->wait_for(0ms) != std::future_status::ready)
+    {
+        schedule_timer(DnsPollInterval);
+        return;
+    }
+
+    auto const result = pending_dns_->get();
+    pending_dns_.reset();
+
+    if (!result.address)
+    {
+        set_error(fmt::format("SOCKS5: DNS lookup failed for {}:{} — {}", proxy_host_, proxy_port_, result.error));
+        return;
+    }
+
+    connect_to(*result.address);
+}
+
+void tr_socks5_udp::connect_to(tr_socket_address const& proxy_address)
+{
+    proxy_addr_ = proxy_address.address();
+    proxy_family_ = tr_ip_protocol_to_af(proxy_address.address().type);
+    state_ = State::Connecting;
+
+    auto const [ss, sslen] = proxy_address.to_sockaddr();
+    do_connect(reinterpret_cast<sockaddr const*>(&ss), sslen);
+}
+
+void tr_socks5_udp::schedule_timer(std::chrono::milliseconds delay)
+{
+    using namespace std::chrono;
+    auto const secs = duration_cast<seconds>(delay);
+    auto tv = timeval{};
+    tv.tv_sec = secs.count();
+    tv.tv_usec = static_cast<decltype(tv.tv_usec)>(duration_cast<microseconds>(delay - secs).count());
+    evtimer_add(timer_.get(), &tv);
+}
+
+void tr_socks5_udp::on_timer(evutil_socket_t /*fd*/, short /*what*/, void* arg)
 {
     auto* self = static_cast<tr_socks5_udp*>(arg);
-    self->dns_req_ = nullptr;
 
-    if (result != 0)
+    if (self->pending_dns_)
     {
-        self->set_error(
-            fmt::format(
-                "SOCKS5: DNS lookup failed for {}:{} — {}",
-                self->proxy_host_,
-                self->proxy_port_,
-                evutil_gai_strerror(result)));
-        return;
+        self->poll_dns();
     }
-
-    auto const res_guard = std::unique_ptr<evutil_addrinfo, decltype(&evutil_freeaddrinfo)>{ res, evutil_freeaddrinfo };
-
-    if (res == nullptr)
-    {
-        self->set_error(fmt::format("SOCKS5: DNS lookup returned no address for {}:{}", self->proxy_host_, self->proxy_port_));
-        return;
-    }
-
-    self->proxy_family_ = res->ai_family;
-    if (auto const socket_address = tr_socket_address::from_sockaddr(res->ai_addr); socket_address)
-    {
-        self->proxy_addr_ = socket_address->address();
-    }
-
-    self->state_ = State::Connecting;
-    self->do_connect(res->ai_addr, static_cast<socklen_t>(res->ai_addrlen));
 }
 
 void tr_socks5_udp::do_connect(sockaddr const* sa, socklen_t salen)

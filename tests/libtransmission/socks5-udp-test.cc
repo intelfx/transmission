@@ -497,6 +497,19 @@ TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
     EXPECT_FALSE(client.is_ready());
 }
 
+TEST_F(Socks5UdpTest, canDestructWhileResolving)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    {
+        auto client = tr_socks5_udp{ evbase.get(), "localhost"sv, 1080U, tr_socks5_udp::ReadyCallback{} };
+        EXPECT_EQ(tr_socks5_udp::State::Resolving, client.state());
+    }
+
+    event_base_loop(evbase.get(), EVLOOP_NONBLOCK);
+}
+
 //  Tests for unwrap_udp_packet (static, no network needed)
 
 TEST_F(Socks5UdpTest, unwrapValidIpv4Packet)
