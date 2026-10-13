@@ -386,6 +386,16 @@ struct tau_tracker
             return;
         }
 
+        auto const route = mediator_.udp_route();
+        if (resolves_remotely(route))
+        {
+            if (route.relay->is_ready())
+            {
+                route.relay->sendto(buf, buflen, host_lookup, port);
+            }
+            return;
+        }
+
         auto const& addr = addr_[ip_protocol];
         TR_ASSERT(addr);
         if (!addr)
@@ -396,7 +406,7 @@ struct tau_tracker
         auto const& [ss, sslen] = *addr;
         auto const* sa = reinterpret_cast<sockaddr const*>(&ss);
 
-        switch (auto const route = mediator_.udp_route(); route.type)
+        switch (route.type)
         {
         case Mediator::UdpRoute::Type::Direct:
             mediator_.sendto(buf, buflen, sa, sslen);
@@ -492,12 +502,14 @@ struct tau_tracker
             return;
         }
 
+        auto const remote_dns = resolves_remotely(route);
+
         for (ipp_t ipp = 0; ipp < NUM_TR_AF_INET_TYPES; ++ipp)
         {
             auto const ipp_enum = static_cast<tr_address_type>(ipp);
 
             // update the addr if our lookup is past its shelf date
-            if (auto& dns = addr_pending_dns_[ipp]; !dns && addr_expires_at_[ipp] <= now)
+            if (auto& dns = addr_pending_dns_[ipp]; !remote_dns && !dns && addr_expires_at_[ipp] <= now)
             {
                 addr_[ipp].reset();
                 dns = std::async(
@@ -517,9 +529,8 @@ struct tau_tracker
                     conn_at));
 
             // also need a valid connection ID...
-            if (auto const& addr = addr_[ipp]; addr && !is_connected(ipp_enum, now) && conn_at == 0)
+            if (has_addr(ipp_enum, remote_dns) && !is_connected(ipp_enum, now) && conn_at == 0)
             {
-                TR_ASSERT(addr->first.ss_family == tr_ip_protocol_to_af(ipp_enum));
                 auto& conn_transc_id = connection_transaction_id[ipp];
 
                 conn_at = now;
@@ -559,9 +570,22 @@ private:
         return connection_id[ip_protocol] != tau_connection_t{} && now < connection_expiration_time[ip_protocol];
     }
 
-    [[nodiscard]] TR_CONSTEXPR20 bool has_addr() const noexcept
+    [[nodiscard]] static bool resolves_remotely(Mediator::UdpRoute const& route)
     {
-        return std::any_of(std::begin(addr_), std::end(addr_), [](auto const& o) { return !!o; });
+        return route.type == Mediator::UdpRoute::Type::Relay && route.relay->resolves_remotely();
+    }
+
+    // Whether requests can be sent to the tracker over `ip_protocol`.
+    // When the proxy resolves the tracker's hostname, only the IPv4 slot is used:
+    // which address family the proxy reaches the tracker over is up to the proxy.
+    [[nodiscard]] bool has_addr(tr_address_type ip_protocol, bool remote_dns) const noexcept
+    {
+        return remote_dns ? ip_protocol == TR_AF_INET : !!addr_[ip_protocol];
+    }
+
+    [[nodiscard]] bool has_addr(bool remote_dns) const noexcept
+    {
+        return remote_dns || std::any_of(std::begin(addr_), std::end(addr_), [](auto const& o) { return !!o; });
     }
 
     void fail_all(bool did_connect, bool did_timeout, std::string_view errmsg)
@@ -619,24 +643,25 @@ private:
 
     void maybe_send_requests(time_t now)
     {
-        if (!has_addr())
+        auto const remote_dns = resolves_remotely(mediator_.udp_route());
+        if (!has_addr(remote_dns))
         {
             return;
         }
 
-        maybe_send_requests(announces, now);
-        maybe_send_requests(scrapes, now);
+        maybe_send_requests(announces, now, remote_dns);
+        maybe_send_requests(scrapes, now, remote_dns);
     }
 
     template<typename T>
-    void maybe_send_requests(std::list<T>& reqs, time_t now)
+    void maybe_send_requests(std::list<T>& reqs, time_t now, bool remote_dns)
     {
         for (auto it = std::begin(reqs); it != std::end(reqs);)
         {
             auto& req = *it;
 
             if (req.sent_at != 0 || // it's already been sent; we're awaiting a response
-                !maybe_send_request(req.ip_protocol, std::data(req.payload), std::size(req.payload), now))
+                !maybe_send_request(req.ip_protocol, std::data(req.payload), std::size(req.payload), now, remote_dns))
             {
                 ++it;
                 continue;
@@ -655,12 +680,18 @@ private:
         }
     }
 
-    bool maybe_send_request(tr_address_type ip_protocol, std::byte const* payload, size_t payload_len, time_t now)
+    bool maybe_send_request(
+        tr_address_type ip_protocol,
+        std::byte const* payload,
+        size_t payload_len,
+        time_t now,
+        bool remote_dns)
     {
         for (uint8_t ipp = 0; ipp < NUM_TR_AF_INET_TYPES; ++ipp)
         {
             auto const ipp_enum = static_cast<tr_address_type>(ipp);
-            if (addr_[ipp] && (ip_protocol == TR_AF_UNSPEC || ipp == ip_protocol) && is_connected(ipp_enum, now))
+            if (has_addr(ipp_enum, remote_dns) && (ip_protocol == TR_AF_UNSPEC || ipp == ip_protocol) &&
+                is_connected(ipp_enum, now))
             {
                 auto const conn_id = connection_id[ipp];
                 logdbg(log_name(), fmt::format("sending request w/connection id {}", conn_id));
@@ -781,12 +812,16 @@ public:
         for (auto& tracker : trackers_)
         {
             // is it a connection response?
-            if (tr_address::is_valid(ip_protocol) && tracker.connecting_at[ip_protocol] != 0 &&
-                transaction_id == tracker.connection_transaction_id[ip_protocol])
+            // N.B. match by the request's address family rather than the response's:
+            // when the tracker is reached through a proxy, the two may differ.
+            for (ipp_t ipp = 0; ipp < NUM_TR_AF_INET_TYPES; ++ipp)
             {
-                logtrace(tracker.log_name(), fmt::format("{} is my connection request!", transaction_id));
-                tracker.on_connection_response(ip_protocol, action_id, buf);
-                return true;
+                if (tracker.connecting_at[ipp] != 0 && transaction_id == tracker.connection_transaction_id[ipp])
+                {
+                    logtrace(tracker.log_name(), fmt::format("{} is my connection request!", transaction_id));
+                    tracker.on_connection_response(static_cast<tr_address_type>(ipp), action_id, buf);
+                    return true;
+                }
             }
 
             // is it a response to one of this tracker's announces?
@@ -799,7 +834,8 @@ public:
                     it != std::end(reqs))
                 {
                     logtrace(tracker.log_name(), fmt::format("{} is an announce request!", transaction_id));
-                    it->on_response(ip_protocol, action_id, buf);
+                    // peers are in the address family the tracker was reached over, if known
+                    it->on_response(tr_address::is_valid(ip_protocol) ? ip_protocol : it->ip_protocol, action_id, buf);
                     reqs.erase(it);
                     return true;
                 }

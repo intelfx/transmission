@@ -51,6 +51,7 @@ constexpr uint8_t Socks5UserPassVersion = 0x01; // RFC 1929
 constexpr uint8_t Socks5UserPassSuccess = 0x00;
 constexpr uint8_t Socks5CmdUdpAssociate = 0x03;
 constexpr uint8_t Socks5AtypIpv4 = 0x01;
+constexpr uint8_t Socks5AtypDomain = 0x03;
 constexpr uint8_t Socks5AtypIpv6 = 0x04;
 constexpr uint8_t Socks5Rsv = 0x00;
 constexpr uint8_t Socks5ReplySuccess = 0x00;
@@ -658,59 +659,78 @@ void tr_socks5_udp::handle_udp_associate_response()
 
 void tr_socks5_udp::sendto(void const* buf, size_t buflen, sockaddr const* dest, socklen_t /*destlen*/)
 {
+    if (auto const socket_addr = tr_socket_address::from_sockaddr(dest); socket_addr)
+    {
+        send_wrapped(make_udp_header(socket_addr->address(), socket_addr->port()), buf, buflen);
+    }
+}
+
+void tr_socks5_udp::sendto(void const* buf, size_t buflen, std::string_view host, tr_port port)
+{
+    if (auto const addr = tr_address::from_string(host); addr)
+    {
+        send_wrapped(make_udp_header(*addr, port), buf, buflen);
+        return;
+    }
+
+    if (std::empty(host) || std::size(host) > 255U)
+    {
+        return;
+    }
+
+    // RSV(2) FRAG(1) ATYP(1) LEN(1) DST.ADDR(LEN) DST.PORT(2)
+    auto header = std::vector<uint8_t>{ 0U, 0U, 0U, Socks5AtypDomain, static_cast<uint8_t>(std::size(host)) };
+    header.insert(std::end(header), std::begin(host), std::end(host));
+    auto const nport = port.network();
+    auto const* const port_bytes = reinterpret_cast<uint8_t const*>(&nport);
+    header.insert(std::end(header), port_bytes, port_bytes + 2);
+
+    send_wrapped(header, buf, buflen);
+}
+
+std::vector<uint8_t> tr_socks5_udp::make_udp_header(tr_address const& addr, tr_port port)
+{
+    // RSV(2) FRAG(1) ATYP(1) DST.ADDR(4|16) DST.PORT(2)
+    auto header = std::vector<uint8_t>{ 0U, 0U, 0U };
+
+    if (addr.is_ipv4())
+    {
+        header.push_back(Socks5AtypIpv4);
+        auto const* const bytes = reinterpret_cast<uint8_t const*>(&addr.addr.addr4);
+        header.insert(std::end(header), bytes, bytes + 4);
+    }
+    else
+    {
+        header.push_back(Socks5AtypIpv6);
+        auto const* const bytes = reinterpret_cast<uint8_t const*>(&addr.addr.addr6);
+        header.insert(std::end(header), bytes, bytes + 16);
+    }
+
+    auto const nport = port.network();
+    auto const* const port_bytes = reinterpret_cast<uint8_t const*>(&nport);
+    header.insert(std::end(header), port_bytes, port_bytes + 2);
+
+    return header;
+}
+
+void tr_socks5_udp::send_wrapped(std::vector<uint8_t> const& header, void const* buf, size_t buflen)
+{
     if (!is_ready() || udp_socket_ == TR_BAD_SOCKET || !relay_addr_)
     {
         return;
     }
 
-    auto const socket_addr = tr_socket_address::from_sockaddr(dest);
-    if (!socket_addr)
-    {
-        return;
-    }
-
-    // Build SOCKS5 UDP request header:
-    // RSV(2) FRAG(1) ATYP(1) DST.ADDR(4|16) DST.PORT(2) DATA(...)
-    auto header = std::array<uint8_t, 2 + 1 + 1 + 16 + 2>{}; // max size for IPv6
-    size_t hdr_len = 0;
-
-    // RSV = 0x0000
-    header[0] = 0;
-    header[1] = 0;
-    // FRAG = 0 (no fragmentation)
-    header[2] = 0;
-
-    auto const& addr = socket_addr->address();
-    auto const port = socket_addr->port();
-
-    if (addr.is_ipv4())
-    {
-        header[3] = Socks5AtypIpv4;
-        std::memcpy(header.data() + 4, &addr.addr.addr4, 4);
-        auto const nport = port.network();
-        std::memcpy(header.data() + 8, &nport, 2);
-        hdr_len = 10;
-    }
-    else
-    {
-        header[3] = Socks5AtypIpv6;
-        std::memcpy(header.data() + 4, &addr.addr.addr6, 16);
-        auto const nport = port.network();
-        std::memcpy(header.data() + 20, &nport, 2);
-        hdr_len = 22;
-    }
-
     // Assemble full packet: header + payload
-    auto packet = std::vector<uint8_t>(hdr_len + buflen);
-    std::memcpy(packet.data(), header.data(), hdr_len);
-    std::memcpy(packet.data() + hdr_len, buf, buflen);
+    auto packet = std::vector<uint8_t>(std::size(header) + buflen);
+    std::memcpy(std::data(packet), std::data(header), std::size(header));
+    std::memcpy(std::data(packet) + std::size(header), buf, buflen);
 
     // Send to relay address
     auto const [ss, sslen] = relay_addr_->to_sockaddr();
     ::sendto(
         udp_socket_,
-        reinterpret_cast<char const*>(packet.data()),
-        packet.size(),
+        reinterpret_cast<char const*>(std::data(packet)),
+        std::size(packet),
         0,
         reinterpret_cast<sockaddr const*>(&ss),
         sslen);
@@ -775,6 +795,19 @@ uint8_t const* tr_socks5_udp::unwrap_udp_packet(
         std::memcpy(&sin6.sin6_port, data + 20, 2); // already network order
         std::memcpy(&from, &sin6, sizeof(sin6));
         fromlen = sizeof(sin6);
+    }
+    else if (atyp == Socks5AtypDomain)
+    {
+        if (datalen < 5 || datalen < size_t{ 7U } + data[4])
+        {
+            return nullptr;
+        }
+        hdr_len = size_t{ 7U } + data[4];
+
+        // the source can't be represented as a sockaddr
+        from = sockaddr_storage{};
+        from.ss_family = AF_UNSPEC;
+        fromlen = 0;
     }
     else
     {

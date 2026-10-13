@@ -85,13 +85,22 @@ public:
     // `dest` is the final destination (tracker), not the relay.
     void sendto(void const* buf, size_t buflen, sockaddr const* dest, socklen_t destlen);
 
+    // Like above, but `host` is resolved by the proxy unless it is an IP address literal.
+    void sendto(void const* buf, size_t buflen, std::string_view host, tr_port port);
+
+    // Whether destination hostnames should be passed to the proxy rather than resolved locally
+    [[nodiscard]] bool resolves_remotely() const noexcept
+    {
+        return proxy_.resolves_remotely();
+    }
+
     [[nodiscard]] tr_socket_t relay_socket() const noexcept
     {
         return udp_socket_;
     }
 
     // Returns the inner payload start, or nullptr if malformed.
-    // Domain-name ATYP packets cannot be represented as sockaddr and are rejected.
+    // For domain-name ATYP packets, `from` is set to AF_UNSPEC and `fromlen` to 0.
     [[nodiscard]] static uint8_t const* unwrap_udp_packet(
         uint8_t const* data,
         size_t datalen,
@@ -128,6 +137,8 @@ private:
     void setup_udp_read_event();
     void queue_tcp_write(uint8_t const* data, size_t len);
     void flush_pending_write();
+    void send_wrapped(std::vector<uint8_t> const& header, void const* buf, size_t buflen);
+    [[nodiscard]] static std::vector<uint8_t> make_udp_header(tr_address const& addr, tr_port port);
 
     static void on_tcp_event(evutil_socket_t fd, short what, void* arg);
     static void on_udp_readable(evutil_socket_t fd, short what, void* arg);

@@ -117,6 +117,8 @@ void closeSocket(tr_socket_t& socket)
 class MockSocks5UdpServer
 {
 public:
+    static auto constexpr ResolvedAddress = "203.0.113.10"sv;
+
     explicit MockSocks5UdpServer(event_base* base, std::optional<std::pair<std::string, std::string>> credentials = {})
         : base_{ base }
         , credentials_{ std::move(credentials) }
@@ -169,6 +171,11 @@ public:
     [[nodiscard]] std::optional<tr_socket_address> udp_destination() const
     {
         return udp_destination_;
+    }
+
+    [[nodiscard]] auto const& udp_destination_host() const noexcept
+    {
+        return udp_destination_host_;
     }
 
     [[nodiscard]] auto const& udp_payload() const noexcept
@@ -445,6 +452,19 @@ private:
         udp_destination_ = tr_socket_address::from_sockaddr(reinterpret_cast<sockaddr const*>(&destination));
         got_udp_datagram_ = true;
 
+        if (destination_len == 0)
+        {
+            // domain name: pretend to resolve it to ResolvedAddress
+            auto const host_len = size_t{ buf[4] };
+            auto port = uint16_t{};
+            std::memcpy(&port, std::data(buf) + 5 + host_len, 2);
+            udp_destination_host_ = std::string{ reinterpret_cast<char const*>(std::data(buf)) + 5, host_len };
+            udp_destination_ = tr_socket_address{ *tr_address::from_string(ResolvedAddress), tr_port::from_network(port) };
+            auto const [ss, sslen] = udp_destination_->to_sockaddr();
+            std::memcpy(&destination, &ss, sslen);
+            destination_len = sslen;
+        }
+
         auto const packet = makeSocks5UdpPacket(reinterpret_cast<sockaddr const*>(&destination), response_payload_);
         EXPECT_FALSE(std::empty(packet));
         auto const n_sent = sendto(
@@ -481,6 +501,7 @@ private:
     std::optional<std::pair<std::string, std::string>> credentials_;
     std::optional<tr_socket_address> associate_destination_;
     std::optional<tr_socket_address> udp_destination_;
+    std::optional<std::string> udp_destination_host_;
     std::vector<uint8_t> udp_payload_;
     std::vector<uint8_t> response_payload_ = { 0x72, 0x65, 0x6c, 0x61, 0x79, 0x2d, 0x6f, 0x6b };
 };
@@ -555,6 +576,35 @@ TEST_F(Socks5UdpTest, proxiesUdpDatagramsThroughMockServer)
     ASSERT_TRUE(incoming_source);
     EXPECT_EQ(*incoming_source, tracker_socket_address);
     EXPECT_EQ(incoming_payload, server.response_payload());
+}
+
+TEST_F(Socks5UdpTest, sendsDomainNameToProxy)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get() };
+    auto proxy_url = makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port());
+    proxy_url.scheme = tr_proxy_url::Scheme::Socks5h;
+    auto client = tr_socks5_udp{ evbase.get(), proxy_url, tr_socks5_udp::ReadyCallback{} };
+    EXPECT_TRUE(client.resolves_remotely());
+    ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+
+    auto incoming_source = std::optional<tr_socket_address>{};
+    client.set_incoming_callback(
+        [&incoming_source](uint8_t const* /*payload*/, size_t /*payload_len*/, sockaddr const* from, socklen_t /*fromlen*/)
+        { incoming_source = tr_socket_address::from_sockaddr(from); });
+
+    auto const request_payload = std::vector<uint8_t>{ 0xde, 0xad, 0xbe, 0xef };
+    client.sendto(std::data(request_payload), std::size(request_payload), "tracker.example"sv, tr_port::from_host(6969));
+
+    ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&incoming_source]() { return !!incoming_source; }));
+    EXPECT_EQ("tracker.example"sv, server.udp_destination_host().value_or(""));
+    EXPECT_EQ(server.udp_payload(), request_payload);
+
+    auto const expected_source = tr_socket_address{ *tr_address::from_string(MockSocks5UdpServer::ResolvedAddress),
+                                                    tr_port::from_host(6969) };
+    EXPECT_EQ(expected_source, *incoming_source);
 }
 
 TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
@@ -888,12 +938,11 @@ TEST_F(Socks5UdpTest, unwrapRejectsFragmented)
 
 TEST_F(Socks5UdpTest, unwrapRejectsUnsupportedAtyp)
 {
-    // ATYP = 0x03 (domain name) is unsupported
     auto packet = std::array<uint8_t, 10>{};
     packet[0] = 0x00;
     packet[1] = 0x00;
     packet[2] = 0x00;
-    packet[3] = 0x03; // domain name ATYP
+    packet[3] = 0x05; // not a valid ATYP
 
     auto from = sockaddr_storage{};
     auto fromlen = socklen_t{};
@@ -902,6 +951,39 @@ TEST_F(Socks5UdpTest, unwrapRejectsUnsupportedAtyp)
     auto const* result = tr_socks5_udp::unwrap_udp_packet(packet.data(), packet.size(), payload_len, from, fromlen);
 
     EXPECT_EQ(result, nullptr);
+}
+
+TEST_F(Socks5UdpTest, unwrapAcceptsDomainName)
+{
+    // RSV RSV FRAG ATYP LEN "example.com" PORT PAYLOAD
+    auto packet = std::vector<uint8_t>{ 0x00, 0x00, 0x00, 0x03, 11 };
+    auto constexpr Host = "example.com"sv;
+    packet.insert(std::end(packet), std::begin(Host), std::end(Host));
+    packet.insert(std::end(packet), { 0x1b, 0x39, 0xab, 0xcd });
+
+    auto from = sockaddr_storage{};
+    auto fromlen = socklen_t{};
+    size_t payload_len = 0;
+
+    auto const* result = tr_socks5_udp::unwrap_udp_packet(std::data(packet), std::size(packet), payload_len, from, fromlen);
+
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(2U, payload_len);
+    EXPECT_EQ(0xab, result[0]);
+    EXPECT_EQ(0xcd, result[1]);
+    EXPECT_EQ(AF_UNSPEC, from.ss_family);
+    EXPECT_EQ(0, fromlen);
+}
+
+TEST_F(Socks5UdpTest, unwrapRejectsTruncatedDomainName)
+{
+    auto packet = std::vector<uint8_t>{ 0x00, 0x00, 0x00, 0x03, 11, 'e', 'x', 'a', 'm', 'p', 'l', 'e' };
+
+    auto from = sockaddr_storage{};
+    auto fromlen = socklen_t{};
+    size_t payload_len = 0;
+
+    EXPECT_EQ(nullptr, tr_socks5_udp::unwrap_udp_packet(std::data(packet), std::size(packet), payload_len, from, fromlen));
 }
 
 TEST_F(Socks5UdpTest, unwrapHandlesZeroLengthPayload)

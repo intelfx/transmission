@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef> // std::byte
 #include <cstdint> // uint32_t, uint64_t
 #include <cstring> // for std::memcpy()
@@ -103,6 +104,7 @@ protected:
             uint16_t const service,
             std::string_view /*log_name*/) const override
         {
+            ++n_dns_lookups_;
             auto const is_localhost = name == "localhost"sv;
             auto const port = tr_port::from_host(service);
             switch (ip_protocol)
@@ -167,6 +169,7 @@ protected:
         std::unique_ptr<event_base, void (*)(event_base*)> const event_base_;
         std::unique_ptr<tr_socks5_udp> socks5_udp_;
         UdpRoute::Type route_type_ = UdpRoute::Type::Direct;
+        mutable std::atomic<size_t> n_dns_lookups_ = 0U;
     };
 
     static void expectEqual(tr_scrape_response const& expected, tr_scrape_response const& actual)
@@ -489,6 +492,29 @@ TEST_F(AnnouncerUdpTest, doesNotLeakDirectUdpWhenSocks5RelayIsNotReady)
         libtransmission::test::waitFor(mediator.eventBase(), [&mediator]() { return !std::empty(mediator.sent_); }, 500ms));
     EXPECT_TRUE(std::empty(mediator.sent_));
     EXPECT_FALSE(response.has_value());
+}
+
+TEST_F(AnnouncerUdpTest, doesNotResolveLocallyWhenProxyResolvesRemotely)
+{
+    auto proxy_url = tr_proxy_url{};
+    proxy_url.scheme = tr_proxy_url::Scheme::Socks5h;
+    proxy_url.host = "127.0.0.1"sv;
+    proxy_url.port = 1U;
+
+    auto mediator = MockMediator{};
+    mediator.socks5_udp_ = std::make_unique<tr_socks5_udp>(mediator.eventBase(), proxy_url, tr_socks5_udp::ReadyCallback{});
+
+    auto announcer = tr_announcer_udp::create(mediator);
+    auto upkeep_timer = createUpkeepTimer(mediator, announcer);
+
+    auto request = buildSimpleScrapeRequestAndResponse().first;
+    announcer->scrape(request, [](tr_scrape_response const& /*resp*/) {});
+
+    EXPECT_FALSE(
+        libtransmission::test::waitFor(
+            mediator.eventBase(),
+            [&mediator]() { return mediator.n_dns_lookups_ != 0U || !std::empty(mediator.sent_); },
+            500ms));
 }
 
 TEST_F(AnnouncerUdpTest, failsWithoutSendingWhenRouteIsBlocked)
