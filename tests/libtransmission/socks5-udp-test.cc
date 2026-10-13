@@ -165,6 +165,12 @@ public:
         return response_payload_;
     }
 
+    void send_tcp_control(std::vector<uint8_t> const& data) const
+    {
+        auto const n_sent = send(tcp_client_socket_, reinterpret_cast<char const*>(std::data(data)), std::size(data), 0);
+        EXPECT_EQ(std::size(data), static_cast<size_t>(n_sent));
+    }
+
     void close_tcp_control()
     {
         tcp_client_event_.reset();
@@ -543,6 +549,24 @@ TEST_F(Socks5UdpTest, ignoresDatagramsNotFromRelay)
     tr_net_close_socket(sock);
 
     EXPECT_FALSE(libtransmission::test::waitFor(evbase.get(), [&incoming_called]() { return incoming_called; }, 200ms));
+}
+
+TEST_F(Socks5UdpTest, ignoresTcpControlDataAfterAssociate)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get() };
+    auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
+    ASSERT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+
+    // more than the client's handshake buffer
+    for (int i = 0; i < 4; ++i)
+    {
+        server.send_tcp_control(std::vector<uint8_t>(256U, 0xff));
+    }
+
+    EXPECT_FALSE(libtransmission::test::waitFor(evbase.get(), [&client]() { return !client.is_ready(); }, 200ms));
 }
 
 TEST_F(Socks5UdpTest, reconnectsAfterTcpControlClose)

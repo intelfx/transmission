@@ -357,6 +357,8 @@ void tr_socks5_udp::on_tcp_readable()
         handle_udp_associate_response();
         break;
     default:
+        // nothing else is expected on the control connection; discard it
+        tcp_buf_used_ = 0;
         break;
     }
 }
