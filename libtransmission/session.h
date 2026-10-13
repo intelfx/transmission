@@ -51,6 +51,7 @@
 #include "libtransmission/open-files.h"
 #include "libtransmission/peer-io.h" // tr_preferred_transport
 #include "libtransmission/port-forwarding.h"
+#include "libtransmission/proxy-rules.h"
 #include "libtransmission/quark.h"
 #include "libtransmission/rpc-server.h"
 #include "libtransmission/session-alt-speeds.h"
@@ -466,6 +467,7 @@ public:
         };
         std::chrono::milliseconds sleep_per_seconds_during_verify = std::chrono::milliseconds{ 100 };
         std::optional<std::string> proxy_url;
+        tr_proxy_rules proxy_rules;
         std::map<tr_address_type, tr_address> announce_ip;
         std::string bind_address_ipv4;
         std::string bind_address_ipv6;
@@ -523,6 +525,7 @@ public:
             Field<&Settings::port_forwarding_enabled>{ TR_KEY_port_forwarding_enabled },
             Field<&Settings::preallocation_mode>{ TR_KEY_preallocation },
             Field<&Settings::preferred_transports>{ TR_KEY_preferred_transports },
+            Field<&Settings::proxy_rules>{ TR_KEY_proxy_rules },
             Field<&Settings::proxy_url>{ TR_KEY_proxy_url },
             Field<&Settings::queue_stalled_enabled>{ TR_KEY_queue_stalled_enabled },
             Field<&Settings::queue_stalled_minutes>{ TR_KEY_queue_stalled_minutes },

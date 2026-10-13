@@ -361,6 +361,34 @@ TEST_F(SettingsTest, canSaveNullableString)
     EXPECT_TRUE(null_p);
 }
 
+TEST_F(SettingsTest, canLoadProxyRules)
+{
+    static auto constexpr Key = TR_KEY_proxy_rules;
+    static auto constexpr ChangedValue = std::string_view{ "# tor\n*.onion/* socks5h://127.0.0.1:9050\n* direct\n" };
+
+    auto settings = tr_session::Settings{};
+    EXPECT_TRUE(std::empty(settings.proxy_rules.rules()));
+
+    auto map = tr_variant::Map{ 1U };
+    map.try_emplace(Key, ChangedValue);
+    settings.load(std::move(map));
+    EXPECT_EQ(ChangedValue, settings.proxy_rules.text());
+    EXPECT_EQ(2U, std::size(settings.proxy_rules.rules()));
+}
+
+TEST_F(SettingsTest, canSaveProxyRules)
+{
+    static auto constexpr Key = TR_KEY_proxy_rules;
+    static auto constexpr ChangedValue = std::string_view{ "# tor\n*.onion/* socks5h://127.0.0.1:9050\n* direct\n" };
+
+    auto settings = tr_session::Settings{};
+    settings.proxy_rules = tr_proxy_rules{ ChangedValue };
+    auto const map = settings.save();
+    auto const val = map.value_if<std::string_view>(Key);
+    ASSERT_TRUE(val);
+    EXPECT_EQ(ChangedValue, *val);
+}
+
 TEST_F(SettingsTest, canLoadDiffServ)
 {
     static auto constexpr Key = TR_KEY_peer_socket_diffserv;

@@ -26,6 +26,7 @@
 #include "libtransmission/net.h" // for tr_port
 #include "libtransmission/open-files.h" // for tr_open_files::Preallocation
 #include "libtransmission/peer-io.h" // tr_preferred_transport
+#include "libtransmission/proxy-rules.h"
 #include "libtransmission/serializer.h"
 #include "libtransmission/utils.h" // for tr_strv_strip(), tr_strlower()
 #include "libtransmission/variant.h"
@@ -595,6 +596,24 @@ tr_variant from_announce_ip(std::map<tr_address_type, tr_address> const& val)
     return tr_variant{ std::move(out) };
 }
 
+// ---
+
+bool to_proxy_rules(tr_variant const& src, tr_proxy_rules* tgt)
+{
+    if (auto const val = src.value_if<std::string_view>())
+    {
+        *tgt = tr_proxy_rules{ *val };
+        return true;
+    }
+
+    return false;
+}
+
+tr_variant from_proxy_rules(tr_proxy_rules const& val)
+{
+    return val.text();
+}
+
 } // unnamed namespace
 
 void Converters::ensure_default_converters()
@@ -615,6 +634,7 @@ void Converters::ensure_default_converters()
             Converters::add(to_port, from_port);
             Converters::add(to_preallocation_mode, from_preallocation_mode);
             Converters::add(to_preferred_transport, from_preferred_transport);
+            Converters::add(to_proxy_rules, from_proxy_rules);
             Converters::add(to_size_t, from_size_t);
             Converters::add(to_string, from_string);
             Converters::add(to_uint64, from_uint64);

@@ -96,6 +96,12 @@ Here is a sample of the three basic types: respectively Boolean, Number and Stri
  * **pidfile:** String Path to file in which daemon PID will be stored (_transmission-daemon only_)
  * **proxy_url:** String? (default = null) Proxy for HTTP(S) requests (for example, requests to tracker). Format `[scheme]://[user:password@][host]:[port]`, where `scheme` is one of: `http`, `https`, `socks4`, `socks4a`, `socks5`, `socks5h`. If null, Transmission respects the CURL environment variables. If empty string, no proxy is used. For more information see [curl proxy documentation](https://curl.se/libcurl/c/CURLOPT_PROXY.html)
    UDP tracker requests are sent through `socks5` and `socks5h` proxies (with `socks5h`, the proxy resolves the tracker's hostname). While any other proxy is set, UDP trackers are not contacted at all.
+ * **proxy_rules:** String (default = "") Per-URL exceptions to `proxy_url`, one rule per line: `<pattern> <proxy>`. `pattern` is a glob (`*` and `?` wildcards) matched against the full URL of a request, e.g. a tracker's announce URL. `proxy` is a proxy URL in the same format as `proxy_url`, or `direct` to not use a proxy. The first matching rule wins; requests that match no rule use `proxy_url`. Empty lines and lines starting with `#` are ignored. Example:
+   ```
+   *.onion/*                  socks5h://127.0.0.1:9050
+   udp://tracker.example.org* socks5://user:password@proxy.example.net
+   *://*.example.com/*        direct
+   ```
  * **scrape_paused_torrents_enabled:** Boolean (default = true)
  * **script_torrent_added_enabled:** Boolean (default = false) Run a script when a torrent is added to Transmission. Environmental variables are passed in as detailed on the [Scripts](./Scripts.md) page.
  * **script_torrent_added_filename:** String (default = "") Path to script.
