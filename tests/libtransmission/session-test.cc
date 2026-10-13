@@ -361,6 +361,17 @@ TEST_F(SessionTest, choosesProxyByRules)
     EXPECT_EQ("socks5://global.example"sv, session_->proxyUrl("https://tracker.test/announce"sv, tr_request_kind::Tracker));
 }
 
+TEST_F(SessionTest, createsSocks5RelaysOnDemand)
+{
+    EXPECT_EQ(nullptr, session_->socks5_relay("http://127.0.0.1:3128"sv));
+    EXPECT_EQ(nullptr, session_->socks5_relay("not a url"sv));
+
+    auto* const relay = session_->socks5_relay("socks5://127.0.0.1:1"sv);
+    ASSERT_NE(nullptr, relay);
+    EXPECT_EQ(relay, session_->socks5_relay("socks5://127.0.0.1:1"sv));
+    EXPECT_NE(relay, session_->socks5_relay("socks5h://127.0.0.1:1"sv));
+}
+
 TEST_F(SessionTest, loadTorrentsThenMagnets)
 {
     static auto constexpr TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/archlinux-2025.05.01-x86_64.iso.torrent";

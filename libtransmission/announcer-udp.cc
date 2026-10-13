@@ -366,11 +366,13 @@ struct tau_tracker
 
     tau_tracker(
         Mediator& mediator,
+        std::string_view const url_in,
         std::string_view const authority_in,
         std::string_view const host_in,
         std::string_view const host_lookup_in,
         tr_port const port_in)
-        : authority{ authority_in }
+        : url{ url_in }
+        , authority{ authority_in }
         , host{ host_in }
         , host_lookup{ host_lookup_in }
         , port{ port_in }
@@ -386,7 +388,7 @@ struct tau_tracker
             return;
         }
 
-        auto const route = mediator_.udp_route();
+        auto const route = mediator_.udp_route(url);
         if (resolves_remotely(route))
         {
             if (route.relay->is_ready())
@@ -482,7 +484,7 @@ struct tau_tracker
             return;
         }
 
-        auto const route = mediator_.udp_route();
+        auto const route = mediator_.udp_route(url);
         if (route.type == Mediator::UdpRoute::Type::Blocked)
         {
             auto const errmsg = _("Can't reach UDP tracker through the configured proxy");
@@ -643,7 +645,7 @@ private:
 
     void maybe_send_requests(time_t now)
     {
-        auto const remote_dns = resolves_remotely(mediator_.udp_route());
+        auto const remote_dns = resolves_remotely(mediator_.udp_route(url));
         if (!has_addr(remote_dns))
         {
             return;
@@ -713,6 +715,7 @@ public:
         return authority;
     }
 
+    std::string_view const url; // the URL this tracker was first seen with
     std::string_view const authority;
     std::string_view const host;
     std::string_view const host_lookup;
@@ -893,6 +896,7 @@ private:
         // we don't have it -- build a new one
         auto& tracker = trackers_.emplace_back(
             mediator_,
+            announce_url.sv(),
             authority,
             parsed->host,
             parsed->host_wo_brackets,

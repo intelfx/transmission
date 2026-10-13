@@ -165,7 +165,7 @@ public:
             tr_socks5_udp* relay = nullptr;
         };
 
-        [[nodiscard]] virtual UdpRoute udp_route() const
+        [[nodiscard]] virtual UdpRoute udp_route([[maybe_unused]] std::string_view tracker_url) const
         {
             return {};
         }

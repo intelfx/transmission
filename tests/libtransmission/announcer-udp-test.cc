@@ -82,7 +82,7 @@ protected:
             return event_base_.get();
         }
 
-        [[nodiscard]] UdpRoute udp_route() const override
+        [[nodiscard]] UdpRoute udp_route(std::string_view /*tracker_url*/) const override
         {
             if (socks5_udp_)
             {

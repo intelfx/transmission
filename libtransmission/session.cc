@@ -247,7 +247,7 @@ void tr_session::DhtMediator::add_pex(tr_sha1_digest_t const& info_hash, tr_pex 
     }
 }
 
-tr_announcer_udp::Mediator::UdpRoute tr_session::AnnouncerUdpMediator::udp_route() const
+tr_announcer_udp::Mediator::UdpRoute tr_session::AnnouncerUdpMediator::udp_route(std::string_view tracker_url) const
 {
     // What to do with UDP tracker traffic when a proxy is configured,
     // but the proxy cannot carry UDP (e.g. it is an HTTP proxy).
@@ -260,16 +260,17 @@ tr_announcer_udp::Mediator::UdpRoute tr_session::AnnouncerUdpMediator::udp_route
 
     using Type = UdpRoute::Type;
 
-    if (auto* const relay = session_.socks5_udp_.get(); relay != nullptr)
-    {
-        return { Type::Relay, relay };
-    }
-
-    // N.B. a null proxy_url lets curl pick a proxy from the environment,
+    // N.B. a null proxy URL lets curl pick a proxy from the environment,
     // which is not taken into account here.
-    if (auto const& proxy_url = session_.settings().proxy_url; !proxy_url || std::empty(*proxy_url))
+    auto const proxy_url = session_.proxyUrl(tracker_url, tr_request_kind::Tracker);
+    if (!proxy_url || std::empty(*proxy_url))
     {
         return { Type::Direct };
+    }
+
+    if (auto* const relay = session_.socks5_relay(*proxy_url); relay != nullptr)
+    {
+        return { Type::Relay, relay };
     }
 
     return { Policy == UnsupportedProxyPolicy::Block ? Type::Blocked : Type::Direct };
@@ -384,6 +385,38 @@ size_t tr_session::WebMediator::clamp(int torrent_id, size_t byte_count) const
 std::optional<std::string> tr_session::WebMediator::proxyUrl(std::string_view url, tr_request_kind kind) const
 {
     return session_->proxyUrl(url, kind);
+}
+
+tr_socks5_udp* tr_session::socks5_relay(std::string_view proxy_url)
+{
+    if (auto const iter = socks5_relays_.find(proxy_url); iter != std::end(socks5_relays_))
+    {
+        return iter->second.get();
+    }
+
+    auto const parsed = tr_proxy_url::parse(proxy_url);
+    if (!parsed || !parsed->supports_udp())
+    {
+        return nullptr;
+    }
+
+    auto relay = std::make_unique<tr_socks5_udp>(
+        event_base(),
+        *parsed,
+        tr_socks5_udp::ReadyCallback{},
+        [this](tr_address_type type) { return bind_address(type); });
+
+    // Route incoming relay packets to the UDP announcer
+    relay->set_incoming_callback(
+        [this](uint8_t const* payload, size_t payload_len, sockaddr const* from, socklen_t fromlen)
+        {
+            if (announcer_udp_)
+            {
+                announcer_udp_->handle_message(payload, payload_len, from, fromlen);
+            }
+        });
+
+    return socks5_relays_.try_emplace(std::string{ proxy_url }, std::move(relay)).first->second.get();
 }
 
 std::optional<std::string> tr_session::proxyUrl(std::string_view url, tr_request_kind kind) const
@@ -916,29 +949,10 @@ void tr_session::setSettings(tr_session::Settings&& settings_in, bool force)
         udp_core_ = std::make_unique<tr_session::tr_udp_core>(*this, udpPort());
     }
 
-    // Initialize SOCKS5 UDP relay if proxy_url points to a SOCKS5 proxy
-    if (auto const& proxy_url = new_settings.proxy_url; force || proxy_url != old_settings.proxy_url)
+    // SOCKS5 UDP relays are created on demand; drop the ones that may no longer be wanted
+    if (force || new_settings.proxy_url != old_settings.proxy_url || new_settings.proxy_rules != old_settings.proxy_rules)
     {
-        socks5_udp_.reset();
-
-        if (auto const parsed = proxy_url ? tr_proxy_url::parse(*proxy_url) : std::nullopt; parsed && parsed->supports_udp())
-        {
-            socks5_udp_ = std::make_unique<tr_socks5_udp>(
-                event_base(),
-                *parsed,
-                tr_socks5_udp::ReadyCallback{},
-                [this](tr_address_type type) { return bind_address(type); });
-
-            // Route incoming relay packets to the UDP announcer
-            socks5_udp_->set_incoming_callback(
-                [this](uint8_t const* payload, size_t payload_len, sockaddr const* from, socklen_t fromlen)
-                {
-                    if (announcer_udp_)
-                    {
-                        announcer_udp_->handle_message(payload, payload_len, from, fromlen);
-                    }
-                });
-        }
+        socks5_relays_.clear();
     }
 
     // Sends out announce messages with advertisedPeerPort(), so this
@@ -1549,7 +1563,7 @@ void tr_session::closeImplPart2(std::promise<void>* closed_promise, std::chrono:
 
     this->announcer_.reset();
     this->announcer_udp_.reset();
-    this->socks5_udp_.reset();
+    this->socks5_relays_.clear();
 
     stats().save();
     peer_mgr_.reset();

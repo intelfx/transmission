@@ -17,7 +17,9 @@
 #include <cstddef> // size_t
 #include <cstdint> // uintX_t
 #include <ctime> // time_t
+#include <functional> // for std::less
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -160,7 +162,7 @@ private:
             return session_.announceIP(family);
         }
 
-        [[nodiscard]] UdpRoute udp_route() const override;
+        [[nodiscard]] UdpRoute udp_route(std::string_view tracker_url) const override;
 
     private:
         tr_session& session_;
@@ -830,6 +832,9 @@ public:
     // and an empty string means connecting directly.
     [[nodiscard]] std::optional<std::string> proxyUrl(std::string_view url, tr_request_kind kind) const;
 
+    // The SOCKS5 UDP relay for a proxy URL, or nullptr if the proxy can't relay UDP
+    [[nodiscard]] tr_socks5_udp* socks5_relay(std::string_view proxy_url);
+
     // callbacks
 
     using queue_start_callback_t = void (*)(tr_session*, tr_torrent*, void* user_data);
@@ -1463,8 +1468,9 @@ private:
     // depends-on: udp_core_
     AnnouncerUdpMediator announcer_udp_mediator_{ *this };
 
+    // SOCKS5 UDP relays for UDP trackers, keyed by proxy URL
     // depends-on: settings_, session_thread_ (event_base)
-    std::unique_ptr<tr_socks5_udp> socks5_udp_;
+    std::map<std::string, std::unique_ptr<tr_socks5_udp>, std::less<>> socks5_relays_;
 
     // depends-on: timer_maker_, torrents_, peer_mgr_
     DhtMediator dht_mediator_{ *this };
