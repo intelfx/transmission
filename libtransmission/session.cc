@@ -48,7 +48,6 @@
 #include "libtransmission/session.h"
 #include "libtransmission/session-alt-speeds.h"
 #include "libtransmission/socks5-udp.h"
-#include "libtransmission/string-utils.h"
 #include "libtransmission/timer-ev.h"
 #include "libtransmission/torrent.h"
 #include "libtransmission/torrent-ctor.h"

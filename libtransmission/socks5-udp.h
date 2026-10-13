@@ -123,8 +123,8 @@ private:
     State state_ = State::Idle;
     tr_socket_t tcp_socket_ = TR_BAD_SOCKET;
     tr_socket_t udp_socket_ = TR_BAD_SOCKET;
-    tr::evhelpers::event_unique_ptr tcp_event_;
-    tr::evhelpers::event_unique_ptr udp_event_;
+    libtransmission::evhelpers::event_unique_ptr tcp_event_;
+    libtransmission::evhelpers::event_unique_ptr udp_event_;
 
     std::optional<tr_socket_address> relay_addr_;
 

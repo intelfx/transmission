@@ -477,7 +477,8 @@ TEST_F(AnnouncerUdpTest, doesNotLeakDirectUdpWhenSocks5RelayIsNotReady)
     auto response = std::optional<tr_scrape_response>{};
     announcer->scrape(request, [&response](tr_scrape_response const& resp) { response = resp; });
 
-    EXPECT_FALSE(tr::test::waitFor(mediator.eventBase(), [&mediator]() { return !std::empty(mediator.sent_); }, 500ms));
+    EXPECT_FALSE(
+        libtransmission::test::waitFor(mediator.eventBase(), [&mediator]() { return !std::empty(mediator.sent_); }, 500ms));
     EXPECT_TRUE(std::empty(mediator.sent_));
     EXPECT_FALSE(response.has_value());
 }

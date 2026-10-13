@@ -389,9 +389,9 @@ private:
     tr_socket_t tcp_client_socket_ = TR_BAD_SOCKET;
     tr_socket_t udp_socket_ = TR_BAD_SOCKET;
 
-    tr::evhelpers::event_unique_ptr tcp_listen_event_;
-    tr::evhelpers::event_unique_ptr tcp_client_event_;
-    tr::evhelpers::event_unique_ptr udp_event_;
+    libtransmission::evhelpers::event_unique_ptr tcp_listen_event_;
+    libtransmission::evhelpers::event_unique_ptr tcp_client_event_;
+    libtransmission::evhelpers::event_unique_ptr udp_event_;
 
     uint16_t tcp_port_ = 0;
     uint16_t udp_port_ = 0;
@@ -409,13 +409,13 @@ private:
 
 } // namespace
 
-class Socks5UdpTest : public ::tr::test::TransmissionTest
+class Socks5UdpTest : public ::libtransmission::test::TransmissionTest
 {
 };
 
 TEST_F(Socks5UdpTest, proxiesUdpDatagramsThroughMockServer)
 {
-    auto evbase = tr::evhelpers::evbase_unique_ptr{ event_base_new() };
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
@@ -423,7 +423,7 @@ TEST_F(Socks5UdpTest, proxiesUdpDatagramsThroughMockServer)
     auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), [&client_ready]() { client_ready = true; } };
 
     ASSERT_TRUE(
-        tr::test::waitFor(
+        libtransmission::test::waitFor(
             evbase.get(),
             [&client, &client_ready, &server]()
             { return client_ready && client.is_ready() && server.got_greeting() && server.got_udp_associate(); }));
@@ -462,7 +462,7 @@ TEST_F(Socks5UdpTest, proxiesUdpDatagramsThroughMockServer)
         tracker_sockaddr_len);
 
     ASSERT_TRUE(
-        tr::test::waitFor(
+        libtransmission::test::waitFor(
             evbase.get(),
             [&incoming_called, &server]() { return incoming_called && server.got_udp_datagram(); }));
 
@@ -479,18 +479,21 @@ TEST_F(Socks5UdpTest, proxiesUdpDatagramsThroughMockServer)
 
 TEST_F(Socks5UdpTest, detectsTcpControlCloseAfterAssociate)
 {
-    auto evbase = tr::evhelpers::evbase_unique_ptr{ event_base_new() };
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
     ASSERT_NE(evbase.get(), nullptr);
 
     auto server = MockSocks5UdpServer{ evbase.get() };
     auto client = tr_socks5_udp{ evbase.get(), "127.0.0.1"sv, server.tcp_port(), tr_socks5_udp::ReadyCallback{} };
 
     ASSERT_TRUE(
-        tr::test::waitFor(evbase.get(), [&client, &server]() { return client.is_ready() && server.got_udp_associate(); }));
+        libtransmission::test::waitFor(
+            evbase.get(),
+            [&client, &server]() { return client.is_ready() && server.got_udp_associate(); }));
 
     server.close_tcp_control();
 
-    EXPECT_TRUE(tr::test::waitFor(evbase.get(), [&client]() { return client.state() == tr_socks5_udp::State::Error; }));
+    EXPECT_TRUE(
+        libtransmission::test::waitFor(evbase.get(), [&client]() { return client.state() == tr_socks5_udp::State::Error; }));
     EXPECT_FALSE(client.is_ready());
 }
 

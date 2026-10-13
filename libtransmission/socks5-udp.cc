@@ -30,7 +30,6 @@
 #include "libtransmission/log.h"
 #include "libtransmission/net.h"
 #include "libtransmission/socks5-udp.h"
-#include "libtransmission/string-utils.h"
 #include "libtransmission/utils.h"
 
 using namespace std::literals;
