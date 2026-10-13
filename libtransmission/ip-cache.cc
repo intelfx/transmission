@@ -262,6 +262,7 @@ void tr_ip_cache::update_global_addr(tr_address_type type) noexcept
         },
         nullptr,
     };
+    options.kind = tr_request_kind::PublicAddress;
     options.ip_proto = IPProtocolMap[type];
     options.sndbuf = 4096;
     options.rcvbuf = 4096;

@@ -1538,6 +1538,7 @@ void portTest(tr_session* session, tr_variant::Map const& args_in, struct tr_rpc
         [](tr_web::FetchResponse const& r) { onPortTested(r); },
         idle_data,
     };
+    options.kind = tr_request_kind::PortCheck;
     options.timeout_secs = TimeoutSecs;
     if (ip_proto)
     {
@@ -1634,12 +1635,13 @@ void onBlocklistFetched(tr_web::FetchResponse const& web_response)
 
 void blocklistUpdate(tr_session* session, tr_variant::Map const& /*args_in*/, struct tr_rpc_idle_data* idle_data)
 {
-    session->fetch(
-        {
-            session->blocklistUrl(),
-            [](tr_web::FetchResponse const& r) { onBlocklistFetched(r); },
-            idle_data,
-        });
+    auto options = tr_web::FetchOptions{
+        session->blocklistUrl(),
+        [](tr_web::FetchResponse const& r) { onBlocklistFetched(r); },
+        idle_data,
+    };
+    options.kind = tr_request_kind::Blocklist;
+    session->fetch(std::move(options));
 }
 
 // ---
@@ -1853,6 +1855,7 @@ void torrentAdd(tr_session* session, tr_variant::Map const& args_in, tr_rpc_idle
             [](tr_web::FetchResponse const& r) { onMetadataFetched(r); },
             d,
         };
+        options.kind = tr_request_kind::TorrentFile;
         options.cookies = cookies;
         session->fetch(std::move(options));
         return;

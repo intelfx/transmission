@@ -306,6 +306,11 @@ public:
             return options_.range;
         }
 
+        [[nodiscard]] constexpr auto kind() const
+        {
+            return options_.kind;
+        }
+
         [[nodiscard]] constexpr auto const& cookies() const
         {
             return options_.cookies;
@@ -637,7 +642,7 @@ public:
             (void)curl_easy_setopt(e, CURLOPT_COOKIEFILE, file.c_str());
         }
 
-        if (auto const& proxy_url = mediator.proxyUrl(); proxy_url)
+        if (auto const& proxy_url = mediator.proxyUrl(task.url(), task.kind()); proxy_url)
         {
             (void)curl_easy_setopt(e, CURLOPT_PROXY, proxy_url->c_str());
         }

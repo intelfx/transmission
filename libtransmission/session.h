@@ -269,7 +269,7 @@ private:
         [[nodiscard]] std::optional<std::string> bind_address_V6() const override;
         [[nodiscard]] std::optional<std::string_view> userAgent() const override;
         [[nodiscard]] size_t clamp(int torrent_id, size_t byte_count) const override;
-        [[nodiscard]] std::optional<std::string> proxyUrl() const override;
+        [[nodiscard]] std::optional<std::string> proxyUrl(std::string_view url, tr_request_kind kind) const override;
         [[nodiscard]] time_t now() const override;
         // runs the tr_web::fetch response callback in the libtransmission thread
         void run(tr_web::FetchDoneFunc&& func, tr_web::FetchResponse&& response) const override;
@@ -823,6 +823,12 @@ public:
     {
         settings_.announce_ip_enabled = enabled;
     }
+
+    // proxies
+
+    // The proxy to use for a request: nullopt lets curl pick one from the environment,
+    // and an empty string means connecting directly.
+    [[nodiscard]] std::optional<std::string> proxyUrl(std::string_view url, tr_request_kind kind) const;
 
     // callbacks
 

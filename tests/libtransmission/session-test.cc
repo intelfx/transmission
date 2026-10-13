@@ -346,6 +346,21 @@ TEST_F(SessionTest, savesSettings)
     }
 }
 
+TEST_F(SessionTest, choosesProxyByRules)
+{
+    auto settings = tr_variant::Map{ 2U };
+    settings.try_emplace(TR_KEY_proxy_url, "socks5://global.example"sv);
+    settings.try_emplace(
+        TR_KEY_proxy_rules,
+        "*.onion/* socks5h://127.0.0.1:9050\n"
+        "udp://tracker.example:* direct\n"sv);
+    tr_sessionSet(session_, tr_variant{ std::move(settings) });
+
+    EXPECT_EQ("socks5h://127.0.0.1:9050"sv, session_->proxyUrl("http://abc.onion/announce"sv, tr_request_kind::Tracker));
+    EXPECT_EQ(""sv, session_->proxyUrl("udp://tracker.example:6969"sv, tr_request_kind::Tracker));
+    EXPECT_EQ("socks5://global.example"sv, session_->proxyUrl("https://tracker.test/announce"sv, tr_request_kind::Tracker));
+}
+
 TEST_F(SessionTest, loadTorrentsThenMagnets)
 {
     static auto constexpr TorrentFile = LIBTRANSMISSION_TEST_ASSETS_DIR "/archlinux-2025.05.01-x86_64.iso.torrent";

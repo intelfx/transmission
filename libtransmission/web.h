@@ -102,6 +102,9 @@ public:
         // IP protocol to use when making the request
         IPProtocol ip_proto = IPProtocol::ANY;
 
+        // What the request is for; used to pick a proxy
+        tr_request_kind kind = tr_request_kind::Other;
+
         static auto constexpr DefaultTimeoutSecs = std::chrono::seconds{ 120 };
     };
 
@@ -165,8 +168,10 @@ public:
             return byte_count;
         }
 
-        // Return the preferred proxy url
-        [[nodiscard]] virtual std::optional<std::string> proxyUrl() const
+        // Return the proxy url to use for a request, or nullopt to let curl decide
+        [[nodiscard]] virtual std::optional<std::string> proxyUrl(
+            [[maybe_unused]] std::string_view url,
+            [[maybe_unused]] tr_request_kind kind) const
         {
             return std::nullopt;
         }

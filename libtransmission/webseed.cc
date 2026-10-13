@@ -490,6 +490,7 @@ void tr_webseed_task::request_next_chunk()
     auto url = tr_urlbuf{};
     makeUrl(webseed_, tor.file_subpath(file_index), std::back_inserter(url));
     auto options = tr_web::FetchOptions{ url.sv(), on_partial_data_fetched, this };
+    options.kind = tr_request_kind::Webseed;
     options.range.emplace(file_offset, file_offset + this_chunk - 1);
     options.speed_limit_tag = tor.id();
     options.on_data_received = [this](size_t const n_bytes)
