@@ -247,9 +247,32 @@ void tr_session::DhtMediator::add_pex(tr_sha1_digest_t const& info_hash, tr_pex 
     }
 }
 
-tr_socks5_udp* tr_session::AnnouncerUdpMediator::socks5_udp() const noexcept
+tr_announcer_udp::Mediator::UdpRoute tr_session::AnnouncerUdpMediator::udp_route() const
 {
-    return session_.socks5_udp_.get();
+    // What to do with UDP tracker traffic when a proxy is configured,
+    // but the proxy cannot carry UDP (e.g. it is an HTTP proxy).
+    enum class UnsupportedProxyPolicy : uint8_t
+    {
+        Block,
+        Direct,
+    };
+    static auto constexpr Policy = UnsupportedProxyPolicy::Block;
+
+    using Type = UdpRoute::Type;
+
+    if (auto* const relay = session_.socks5_udp_.get(); relay != nullptr)
+    {
+        return { Type::Relay, relay };
+    }
+
+    // N.B. a null proxy_url lets curl pick a proxy from the environment,
+    // which is not taken into account here.
+    if (auto const& proxy_url = session_.settings().proxy_url; !proxy_url || std::empty(*proxy_url))
+    {
+        return { Type::Direct };
+    }
+
+    return { Policy == UnsupportedProxyPolicy::Block ? Type::Blocked : Type::Direct };
 }
 
 // ---

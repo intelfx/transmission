@@ -80,9 +80,14 @@ protected:
             return event_base_.get();
         }
 
-        [[nodiscard]] tr_socks5_udp* socks5_udp() const noexcept override
+        [[nodiscard]] UdpRoute udp_route() const override
         {
-            return socks5_udp_.get();
+            if (socks5_udp_)
+            {
+                return { UdpRoute::Type::Relay, socks5_udp_.get() };
+            }
+
+            return { route_type_ };
         }
 
         [[nodiscard]] std::optional<tr_address> announce_ip([[maybe_unused]] tr_address_type family) const override
@@ -160,6 +165,7 @@ protected:
 
         std::unique_ptr<event_base, void (*)(event_base*)> const event_base_;
         std::unique_ptr<tr_socks5_udp> socks5_udp_;
+        UdpRoute::Type route_type_ = UdpRoute::Type::Direct;
     };
 
     static void expectEqual(tr_scrape_response const& expected, tr_scrape_response const& actual)
@@ -481,6 +487,26 @@ TEST_F(AnnouncerUdpTest, doesNotLeakDirectUdpWhenSocks5RelayIsNotReady)
         libtransmission::test::waitFor(mediator.eventBase(), [&mediator]() { return !std::empty(mediator.sent_); }, 500ms));
     EXPECT_TRUE(std::empty(mediator.sent_));
     EXPECT_FALSE(response.has_value());
+}
+
+TEST_F(AnnouncerUdpTest, failsWithoutSendingWhenRouteIsBlocked)
+{
+    auto mediator = MockMediator{};
+    mediator.route_type_ = tr_announcer_udp::Mediator::UdpRoute::Type::Blocked;
+
+    auto announcer = tr_announcer_udp::create(mediator);
+    auto upkeep_timer = createUpkeepTimer(mediator, announcer);
+
+    auto request = buildSimpleScrapeRequestAndResponse().first;
+    auto response = std::optional<tr_scrape_response>{};
+    announcer->scrape(request, [&response](tr_scrape_response const& resp) { response = resp; });
+
+    ASSERT_TRUE(response.has_value());
+    EXPECT_FALSE(response->did_connect);
+    EXPECT_FALSE(response->did_timeout);
+    EXPECT_FALSE(std::empty(response->errmsg));
+    EXPECT_FALSE(
+        libtransmission::test::waitFor(mediator.eventBase(), [&mediator]() { return !std::empty(mediator.sent_); }, 500ms));
 }
 
 TEST_F(AnnouncerUdpTest, canDestructCleanlyEvenWhenBusy)

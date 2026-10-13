@@ -396,19 +396,22 @@ struct tau_tracker
         auto const& [ss, sslen] = *addr;
         auto const* sa = reinterpret_cast<sockaddr const*>(&ss);
 
-        // If a SOCKS5 proxy is configured, all UDP tracker traffic must go
-        // through the relay. Sending directly would leak the user's real IP.
-        if (auto* socks = mediator_.socks5_udp(); socks != nullptr)
+        switch (auto const route = mediator_.udp_route(); route.type)
         {
-            if (socks->is_ready())
+        case Mediator::UdpRoute::Type::Direct:
+            mediator_.sendto(buf, buflen, sa, sslen);
+            break;
+
+        case Mediator::UdpRoute::Type::Relay:
+            if (route.relay->is_ready())
             {
-                socks->sendto(buf, buflen, sa, sslen);
+                route.relay->sendto(buf, buflen, sa, sslen);
             }
+            break;
 
-            return;
+        case Mediator::UdpRoute::Type::Blocked:
+            break;
         }
-
-        mediator_.sendto(buf, buflen, sa, sslen);
     }
 
     void on_connection_response(tr_address_type ip_protocol, tau_action_t action, InBuf& buf)
@@ -466,6 +469,12 @@ struct tau_tracker
         // are there any tracker requests pending?
         if (is_idle())
         {
+            return;
+        }
+
+        if (mediator_.udp_route().type == Mediator::UdpRoute::Type::Blocked)
+        {
+            fail_all(false, false, _("Can't reach UDP tracker through the configured proxy"));
             return;
         }
 

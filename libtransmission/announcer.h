@@ -148,10 +148,26 @@ public:
             uint16_t service,
             std::string_view log_name) const;
 
-        // SOCKS5 UDP relay support
-        [[nodiscard]] virtual tr_socks5_udp* socks5_udp() const noexcept
+        // How UDP tracker traffic must be sent
+        struct UdpRoute
         {
-            return nullptr;
+            enum class Type : uint8_t
+            {
+                // send directly from the session's UDP socket
+                Direct,
+                // send through a SOCKS5 UDP relay; drop while the relay is not ready
+                Relay,
+                // never send; fail requests instead
+                Blocked,
+            };
+
+            Type type = Type::Direct;
+            tr_socks5_udp* relay = nullptr;
+        };
+
+        [[nodiscard]] virtual UdpRoute udp_route() const
+        {
+            return {};
         }
     };
 

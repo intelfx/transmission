@@ -159,7 +159,7 @@ private:
             return session_.announceIP(family);
         }
 
-        [[nodiscard]] tr_socks5_udp* socks5_udp() const noexcept override;
+        [[nodiscard]] UdpRoute udp_route() const override;
 
     private:
         tr_session& session_;
