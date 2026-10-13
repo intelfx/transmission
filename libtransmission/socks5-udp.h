@@ -47,6 +47,7 @@ public:
         Resolving,
         Connecting,
         SentGreeting,
+        SentAuth,
         SentUdpAssociate,
         Ready,
         Error,
@@ -119,6 +120,8 @@ private:
     void send_greeting();
     void send_udp_associate();
     void handle_greeting_response();
+    void send_auth();
+    void handle_auth_response();
     void handle_udp_associate_response();
     void set_error(std::string_view msg);
     void close_connection();

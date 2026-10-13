@@ -45,6 +45,10 @@ namespace
 
 constexpr uint8_t Socks5Version = 0x05;
 constexpr uint8_t Socks5AuthNone = 0x00;
+constexpr uint8_t Socks5AuthUserPass = 0x02;
+constexpr uint8_t Socks5AuthNoAcceptable = 0xFF;
+constexpr uint8_t Socks5UserPassVersion = 0x01; // RFC 1929
+constexpr uint8_t Socks5UserPassSuccess = 0x00;
 constexpr uint8_t Socks5CmdUdpAssociate = 0x03;
 constexpr uint8_t Socks5AtypIpv4 = 0x01;
 constexpr uint8_t Socks5AtypIpv6 = 0x04;
@@ -375,6 +379,9 @@ void tr_socks5_udp::on_tcp_readable()
     case State::SentGreeting:
         handle_greeting_response();
         break;
+    case State::SentAuth:
+        handle_auth_response();
+        break;
     case State::SentUdpAssociate:
         handle_udp_associate_response();
         break;
@@ -389,11 +396,16 @@ void tr_socks5_udp::on_tcp_readable()
 
 void tr_socks5_udp::send_greeting()
 {
-    // VER=5, NMETHODS=1, METHOD=NO_AUTH
-    uint8_t const greeting[] = { Socks5Version, 1, Socks5AuthNone };
+    // VER=5, NMETHODS, METHODS...
+    auto greeting = std::vector<uint8_t>{ Socks5Version, 1U, Socks5AuthNone };
+    if (proxy_.username)
+    {
+        greeting[1] = 2U;
+        greeting.push_back(Socks5AuthUserPass);
+    }
 
     pending_state_ = State::SentGreeting;
-    queue_tcp_write(greeting, sizeof(greeting));
+    queue_tcp_write(std::data(greeting), std::size(greeting));
 }
 
 void tr_socks5_udp::handle_greeting_response()
@@ -404,10 +416,69 @@ void tr_socks5_udp::handle_greeting_response()
         return; // need more data
     }
 
-    if (tcp_buf_[0] != Socks5Version || tcp_buf_[1] != Socks5AuthNone)
+    if (tcp_buf_[0] != Socks5Version)
+    {
+        set_error("SOCKS5: invalid version in greeting response"sv);
+        return;
+    }
+
+    auto const method = tcp_buf_[1];
+    tcp_buf_used_ = 0;
+
+    if (method == Socks5AuthNone)
+    {
+        send_udp_associate();
+    }
+    else if (method == Socks5AuthUserPass && proxy_.username)
+    {
+        send_auth();
+    }
+    else if (method == Socks5AuthNoAcceptable)
     {
         set_error(
-            fmt::format("SOCKS5: unsupported auth method {:d} (only no-auth supported)", static_cast<unsigned>(tcp_buf_[1])));
+            proxy_.username ? "SOCKS5: proxy accepts neither no-auth nor username/password authentication"sv :
+                              "SOCKS5: proxy requires authentication"sv);
+    }
+    else
+    {
+        set_error(fmt::format("SOCKS5: proxy selected unsupported auth method {:d}", static_cast<unsigned>(method)));
+    }
+}
+
+void tr_socks5_udp::send_auth()
+{
+    auto const& username = *proxy_.username;
+    auto const& password = proxy_.password.value_or(std::string{});
+    if (std::size(username) > 255U || std::size(password) > 255U)
+    {
+        set_error("SOCKS5: username or password is longer than 255 bytes"sv);
+        return;
+    }
+
+    // VER=1 ULEN UNAME PLEN PASSWD
+    auto request = std::vector<uint8_t>{};
+    request.reserve(3U + std::size(username) + std::size(password));
+    request.push_back(Socks5UserPassVersion);
+    request.push_back(static_cast<uint8_t>(std::size(username)));
+    request.insert(std::end(request), std::begin(username), std::end(username));
+    request.push_back(static_cast<uint8_t>(std::size(password)));
+    request.insert(std::end(request), std::begin(password), std::end(password));
+
+    pending_state_ = State::SentAuth;
+    queue_tcp_write(std::data(request), std::size(request));
+}
+
+void tr_socks5_udp::handle_auth_response()
+{
+    // Expect 2 bytes: VER(1) STATUS
+    if (tcp_buf_used_ < 2)
+    {
+        return; // need more data
+    }
+
+    if (tcp_buf_[0] != Socks5UserPassVersion || tcp_buf_[1] != Socks5UserPassSuccess)
+    {
+        set_error("SOCKS5: proxy rejected username/password"sv);
         return;
     }
 

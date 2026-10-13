@@ -3,12 +3,15 @@
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -38,6 +41,8 @@ namespace
 
 constexpr uint8_t Socks5Version = 0x05;
 constexpr uint8_t Socks5AuthNone = 0x00;
+constexpr uint8_t Socks5AuthUserPass = 0x02;
+constexpr uint8_t Socks5AuthNoAcceptable = 0xFF;
 constexpr uint8_t Socks5CmdUdpAssociate = 0x03;
 constexpr uint8_t Socks5AtypIpv4 = 0x01;
 constexpr uint8_t Socks5AtypIpv6 = 0x04;
@@ -112,8 +117,9 @@ void closeSocket(tr_socket_t& socket)
 class MockSocks5UdpServer
 {
 public:
-    explicit MockSocks5UdpServer(event_base* base)
+    explicit MockSocks5UdpServer(event_base* base, std::optional<std::pair<std::string, std::string>> credentials = {})
         : base_{ base }
+        , credentials_{ std::move(credentials) }
     {
         openUdpRelay();
         openTcpListener();
@@ -255,6 +261,7 @@ private:
         tcp_client_socket_ = socket;
         tcp_buffer_.clear();
         got_greeting_ = false;
+        got_auth_ = false;
         got_udp_associate_ = false;
         ASSERT_EQ(evutil_make_socket_nonblocking(tcp_client_socket_), 0);
 
@@ -298,16 +305,59 @@ private:
             }
 
             EXPECT_EQ(tcp_buffer_[0], Socks5Version);
-            EXPECT_EQ(n_methods, 1U);
-            EXPECT_EQ(tcp_buffer_[2], Socks5AuthNone);
+            auto const* const methods_begin = std::data(tcp_buffer_) + 2;
+            auto const* const methods_end = methods_begin + n_methods;
+            auto const offers = [methods_begin, methods_end](uint8_t method)
+            {
+                return std::find(methods_begin, methods_end, method) != methods_end;
+            };
 
-            uint8_t const response[] = { Socks5Version, Socks5AuthNone };
+            auto method = uint8_t{ Socks5AuthNoAcceptable };
+            if (!credentials_ && offers(Socks5AuthNone))
+            {
+                method = Socks5AuthNone;
+                got_auth_ = true;
+            }
+            else if (credentials_ && offers(Socks5AuthUserPass))
+            {
+                method = Socks5AuthUserPass;
+            }
+
+            uint8_t const response[] = { Socks5Version, method };
             auto const n_sent = send(tcp_client_socket_, reinterpret_cast<char const*>(response), sizeof(response), 0);
             EXPECT_GE(n_sent, 0);
             EXPECT_EQ(static_cast<size_t>(n_sent), sizeof(response));
 
             tcp_buffer_.erase(std::begin(tcp_buffer_), std::begin(tcp_buffer_) + greeting_size);
             got_greeting_ = true;
+        }
+
+        if (!got_auth_)
+        {
+            // VER=1 ULEN UNAME PLEN PASSWD
+            if (std::size(tcp_buffer_) < 2U || std::size(tcp_buffer_) < 3U + tcp_buffer_[1] ||
+                std::size(tcp_buffer_) < 3U + tcp_buffer_[1] + tcp_buffer_[2U + tcp_buffer_[1]])
+            {
+                return;
+            }
+
+            auto const ulen = size_t{ tcp_buffer_[1] };
+            auto const plen = size_t{ tcp_buffer_[2U + ulen] };
+            auto const* const data = reinterpret_cast<char const*>(std::data(tcp_buffer_));
+            auto const username = std::string{ data + 2, ulen };
+            auto const password = std::string{ data + 3 + ulen, plen };
+            auto const ok = tcp_buffer_[0] == 0x01 && credentials_ && std::make_pair(username, password) == *credentials_;
+
+            uint8_t const response[] = { 0x01, static_cast<uint8_t>(ok ? 0x00 : 0x01) };
+            auto const n_sent = send(tcp_client_socket_, reinterpret_cast<char const*>(response), sizeof(response), 0);
+            EXPECT_EQ(static_cast<size_t>(n_sent), sizeof(response));
+
+            tcp_buffer_.erase(std::begin(tcp_buffer_), std::begin(tcp_buffer_) + 3 + ulen + plen);
+            got_auth_ = ok;
+            if (!ok)
+            {
+                return;
+            }
         }
 
         if (!got_udp_associate_)
@@ -422,11 +472,13 @@ private:
     uint16_t udp_port_ = 0;
 
     bool got_greeting_ = false;
+    bool got_auth_ = false;
     bool got_udp_associate_ = false;
     bool got_udp_datagram_ = false;
     size_t n_udp_associates_ = 0U;
 
     std::vector<uint8_t> tcp_buffer_;
+    std::optional<std::pair<std::string, std::string>> credentials_;
     std::optional<tr_socket_address> associate_destination_;
     std::optional<tr_socket_address> udp_destination_;
     std::vector<uint8_t> udp_payload_;
@@ -627,6 +679,49 @@ TEST_F(Socks5UdpTest, reconnectsAfterTcpControlClose)
         libtransmission::test::waitFor(
             evbase.get(),
             [&client, &server]() { return client.is_ready() && server.n_udp_associates() == 2U; }));
+}
+
+TEST_F(Socks5UdpTest, authenticatesWithUsernameAndPassword)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get(), std::pair{ "user"s, "p@ss:word"s } };
+    auto proxy_url = makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port());
+    proxy_url.username = "user"s;
+    proxy_url.password = "p@ss:word"s;
+    auto client = tr_socks5_udp{ evbase.get(), proxy_url, tr_socks5_udp::ReadyCallback{} };
+
+    EXPECT_TRUE(libtransmission::test::waitFor(evbase.get(), [&client]() { return client.is_ready(); }));
+}
+
+TEST_F(Socks5UdpTest, failsWithWrongPassword)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get(), std::pair{ "user"s, "password"s } };
+    auto proxy_url = makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port());
+    proxy_url.username = "user"s;
+    proxy_url.password = "wrong"s;
+    auto client = tr_socks5_udp{ evbase.get(), proxy_url, tr_socks5_udp::ReadyCallback{} };
+
+    EXPECT_TRUE(
+        libtransmission::test::waitFor(evbase.get(), [&client]() { return client.state() == tr_socks5_udp::State::Error; }));
+}
+
+TEST_F(Socks5UdpTest, failsWithoutCredentialsWhenProxyRequiresThem)
+{
+    auto evbase = libtransmission::evhelpers::evbase_unique_ptr{ event_base_new() };
+    ASSERT_NE(evbase.get(), nullptr);
+
+    auto server = MockSocks5UdpServer{ evbase.get(), std::pair{ "user"s, "password"s } };
+    auto client = tr_socks5_udp{ evbase.get(),
+                                 makeSocks5ProxyUrl("127.0.0.1"sv, server.tcp_port()),
+                                 tr_socks5_udp::ReadyCallback{} };
+
+    EXPECT_TRUE(
+        libtransmission::test::waitFor(evbase.get(), [&client]() { return client.state() == tr_socks5_udp::State::Error; }));
 }
 
 TEST_F(Socks5UdpTest, resolvesProxyHostname)
