@@ -199,6 +199,11 @@ void tr_socks5_udp::do_connect(sockaddr const* sa, socklen_t salen)
         return;
     }
 
+    // The association lives as long as this otherwise idle connection,
+    // so keep middleboxes from expiring it
+    auto const one = int{ 1 };
+    (void)setsockopt(tcp_socket_, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<char const*>(&one), sizeof(one));
+
     int const ret = connect(tcp_socket_, sa, salen);
     if (ret != 0 &&
 #ifdef _WIN32
