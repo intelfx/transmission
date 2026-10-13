@@ -677,6 +677,8 @@ TEST_F(RpcTest, sessionGet)
         TR_KEY_pex_enabled,
         TR_KEY_port_forwarding_enabled,
         TR_KEY_preferred_transports,
+        TR_KEY_proxy_rules,
+        TR_KEY_proxy_url,
         TR_KEY_queue_stalled_enabled,
         TR_KEY_queue_stalled_minutes,
         TR_KEY_rename_partial_files,
@@ -737,6 +739,51 @@ TEST_F(RpcTest, sessionGet)
 
     // cleanup
     tr_torrentRemove(tor, false, nullptr, nullptr);
+}
+
+TEST_F(RpcTest, sessionSetProxySettings)
+{
+    auto const exec = [this](tr_quark method, tr_variant::Map params)
+    {
+        auto request_map = tr_variant::Map{ 4U };
+        request_map.try_emplace(TR_KEY_jsonrpc, JsonRpc::Version);
+        request_map.try_emplace(TR_KEY_method, tr_variant::unmanaged_string(method));
+        request_map.try_emplace(TR_KEY_params, std::move(params));
+        request_map.try_emplace(TR_KEY_id, 12345);
+
+        auto request = tr_variant{ std::move(request_map) };
+        auto response = tr_variant{};
+        tr_rpc_request_exec(
+            session_,
+            request,
+            [&response](tr_session* /*session*/, tr_variant&& resp) { response = std::move(resp); });
+        return response;
+    };
+
+    static auto constexpr Rules = "*.onion/* socks5h://127.0.0.1:9050\n"sv;
+
+    auto params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_proxy_url, "socks5://127.0.0.1:1080"sv);
+    params.try_emplace(TR_KEY_proxy_rules, Rules);
+    exec(TR_KEY_session_set, std::move(params));
+    EXPECT_EQ("socks5://127.0.0.1:1080"sv, session_->settings().proxy_url.value_or(""));
+    EXPECT_EQ(Rules, session_->settings().proxy_rules.text());
+
+    auto response = exec(TR_KEY_session_get, {});
+    auto const* result = response.get_if<tr_variant::Map>()->find_if<tr_variant::Map>(TR_KEY_result);
+    ASSERT_NE(nullptr, result);
+    EXPECT_EQ("socks5://127.0.0.1:1080"sv, result->value_if<std::string_view>(TR_KEY_proxy_url).value_or(""sv));
+    EXPECT_EQ(Rules, result->value_if<std::string_view>(TR_KEY_proxy_rules).value_or(""sv));
+
+    params = tr_variant::Map{ 1U };
+    params.try_emplace(TR_KEY_proxy_url, nullptr);
+    exec(TR_KEY_session_set, std::move(params));
+    EXPECT_FALSE(session_->settings().proxy_url);
+
+    response = exec(TR_KEY_session_get, {});
+    result = response.get_if<tr_variant::Map>()->find_if<tr_variant::Map>(TR_KEY_result);
+    ASSERT_NE(nullptr, result);
+    EXPECT_TRUE(result->value_if<std::nullptr_t>(TR_KEY_proxy_url));
 }
 
 TEST_F(RpcTest, torrentGet)

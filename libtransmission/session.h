@@ -832,6 +832,9 @@ public:
     // and an empty string means connecting directly.
     [[nodiscard]] std::optional<std::string> proxyUrl(std::string_view url, tr_request_kind kind) const;
 
+    void setProxyUrl(std::optional<std::string> url);
+    void setProxyRules(std::string_view rules);
+
     // The SOCKS5 UDP relay for a proxy URL, or nullptr if the proxy can't relay UDP
     [[nodiscard]] tr_socks5_udp* socks5_relay(std::string_view proxy_url);
 

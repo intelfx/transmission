@@ -387,6 +387,20 @@ std::optional<std::string> tr_session::WebMediator::proxyUrl(std::string_view ur
     return session_->proxyUrl(url, kind);
 }
 
+void tr_session::setProxyUrl(std::optional<std::string> url)
+{
+    auto settings = settings_;
+    settings.proxy_url = std::move(url);
+    setSettings(std::move(settings), false);
+}
+
+void tr_session::setProxyRules(std::string_view rules)
+{
+    auto settings = settings_;
+    settings.proxy_rules = tr_proxy_rules{ rules };
+    setSettings(std::move(settings), false);
+}
+
 tr_socks5_udp* tr_session::socks5_relay(std::string_view proxy_url)
 {
     if (auto const iter = socks5_relays_.find(proxy_url); iter != std::end(socks5_relays_))

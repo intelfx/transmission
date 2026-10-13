@@ -180,7 +180,7 @@ namespace
 namespace
 {
 auto constexpr RecentlyActiveSeconds = time_t{ 60 };
-auto constexpr RpcVersion = int64_t{ 19 };
+auto constexpr RpcVersion = int64_t{ 20 };
 auto constexpr RpcVersionMin = int64_t{ 14 };
 
 enum class TrFormat : uint8_t
@@ -2419,6 +2419,40 @@ using SessionAccessors = std::pair<SessionGetter, SessionSetter>;
             if (!tgt.load_preferred_transports(src))
             {
                 err = { JsonRpc::Error::INVALID_PARAMS, R"(the list must be unique with the values "utp" or "tcp")" };
+            }
+        });
+
+    map.try_emplace(
+        TR_KEY_proxy_rules,
+        [](tr_session const& src) -> tr_variant { return src.settings().proxy_rules.text(); },
+        [](tr_session& tgt, tr_variant const& src, ErrorInfo& /*err*/)
+        {
+            if (auto const val = src.value_if<std::string_view>())
+            {
+                tgt.setProxyRules(*val);
+            }
+        });
+
+    map.try_emplace(
+        TR_KEY_proxy_url,
+        [](tr_session const& src) -> tr_variant
+        {
+            if (auto const& val = src.settings().proxy_url)
+            {
+                return *val;
+            }
+
+            return nullptr;
+        },
+        [](tr_session& tgt, tr_variant const& src, ErrorInfo& /*err*/)
+        {
+            if (auto const val = src.value_if<std::string_view>())
+            {
+                tgt.setProxyUrl(std::string{ *val });
+            }
+            else if (src.holds_alternative<std::nullptr_t>())
+            {
+                tgt.setProxyUrl(std::nullopt);
             }
         });
 

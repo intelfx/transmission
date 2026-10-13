@@ -592,6 +592,8 @@ Response parameters: `path`, `name`, and `id`, holding the torrent ID integer
 | `pex_enabled` | boolean | true means allow PEX in public torrents
 | `port_forwarding_enabled` | boolean | true means ask upstream router to forward the configured peer port to transmission using UPnP or NAT-PMP
 | `preferred_transports` | string[] | preference of transport protocols, see `settings.json` for details
+| `proxy_rules` | string | per-URL exceptions to `proxy_url`, see `settings.json` for details
+| `proxy_url` | string or null | proxy for requests to trackers and other web requests, see `settings.json` for details
 | `queue_stalled_enabled` | boolean | whether or not to consider idle torrents as stalled
 | `queue_stalled_minutes` | number | torrents that are idle for N minuets aren't counted toward `seed_queue_size` or `download_queue_size`
 | `rename_partial_files` | boolean | true means append `.part` to incomplete files
@@ -1104,3 +1106,12 @@ Transmission 4.1.1 (`rpc_version_semver` 6.0.1, `rpc_version`: 19)
 | `session_get` | `speed_limit_up` reverted to return an integer
 | `group_get` | `speed_limit_down` reverted to return an integer
 | `group_get` | `speed_limit_up` reverted to return an integer
+
+Unreleased (`rpc_version_semver` 6.1.0, `rpc_version`: 20)
+
+| Method | Description
+|:---|:---
+| `session_get` | new arg `proxy_rules`
+| `session_get` | new arg `proxy_url`
+| `session_set` | new arg `proxy_rules`
+| `session_set` | new arg `proxy_url`
