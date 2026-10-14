@@ -1536,6 +1536,87 @@ void torrentRenamePath(tr_session* session, tr_variant::Map const& args_in, stru
 
 // ---
 
+// One entry per file: a string to give the file a new path, or null to keep its path.
+[[nodiscard]] std::optional<std::vector<std::optional<std::string>>> file_paths_from_list(tr_variant::Vector const& vec)
+{
+    auto paths = std::vector<std::optional<std::string>>{};
+    paths.reserve(std::size(vec));
+    for (auto const& var : vec)
+    {
+        if (auto const val = var.value_if<std::string_view>())
+        {
+            paths.emplace_back(*val);
+        }
+        else if (var.index() == tr_variant::NullIndex)
+        {
+            paths.emplace_back();
+        }
+        else
+        {
+            return {};
+        }
+    }
+    return paths;
+}
+
+void torrentRenameFiles(tr_session* session, tr_variant::Map const& args_in, tr_rpc_idle_data* idle_data)
+{
+    using namespace JsonRpc;
+
+    auto const torrents = getTorrents(session, args_in);
+    if (std::size(torrents) != 1U)
+    {
+        tr_rpc_idle_done(idle_data, Error::INVALID_PARAMS, "torrent_rename_files requires 1 torrent"sv);
+        return;
+    }
+
+    auto const* const paths_vec = args_in.find_if<tr_variant::Vector>(TR_KEY_file_paths);
+    auto paths = paths_vec != nullptr ? file_paths_from_list(*paths_vec) : std::nullopt;
+    if (!paths)
+    {
+        tr_rpc_idle_done(idle_data, Error::INVALID_PARAMS, "file_paths must be an array of strings and nulls"sv);
+        return;
+    }
+
+    auto location = std::optional<std::string>{};
+    if (auto const val = args_in.value_if<std::string_view>(TR_KEY_location))
+    {
+        if (tr_sys_path_is_relative(*val))
+        {
+            tr_rpc_idle_done(idle_data, Error::PATH_NOT_ABSOLUTE, "new location path is not absolute"sv);
+            return;
+        }
+        location = *val;
+    }
+
+    auto const tor_id = torrents.front()->id();
+    auto const changes_location = location.has_value();
+    torrents.front()->set_file_paths(
+        std::move(*paths),
+        std::move(location),
+        [session, idle_data, tor_id, changes_location](tr_error const& error)
+        {
+            idle_data->args_out.try_emplace(TR_KEY_id, tor_id);
+
+            if (error)
+            {
+                auto const code = error.code() == EINVAL ? Error::INVALID_PARAMS : Error::SYSTEM_ERROR;
+                tr_rpc_idle_done(idle_data, code, error.message());
+                return;
+            }
+
+            if (auto* const tor = session->torrents().get(tor_id); tor != nullptr)
+            {
+                idle_data->args_out.try_emplace(TR_KEY_name, tor->name());
+                session->rpcNotify(changes_location ? TR_RPC_TORRENT_MOVED : TR_RPC_TORRENT_CHANGED, tor);
+            }
+
+            tr_rpc_idle_done(idle_data, Error::SUCCESS, {});
+        });
+}
+
+// ---
+
 void onPortTested(tr_web::FetchResponse const& web_response)
 {
     using namespace JsonRpc;
@@ -2902,10 +2983,11 @@ auto const sync_handlers = small::max_size_map<tr_quark, std::pair<SyncHandler, 
 
 using AsyncHandler = void (*)(tr_session*, tr_variant::Map const&, tr_rpc_idle_data*);
 
-auto const async_handlers = small::max_size_map<tr_quark, std::pair<AsyncHandler, bool /*has_side_effects*/>, 4U>{ {
+auto const async_handlers = small::max_size_map<tr_quark, std::pair<AsyncHandler, bool /*has_side_effects*/>, 5U>{ {
     { TR_KEY_blocklist_update, { blocklistUpdate, true } },
     { TR_KEY_port_test, { portTest, false } },
     { TR_KEY_torrent_add, { torrentAdd, true } },
+    { TR_KEY_torrent_rename_files, { torrentRenameFiles, true } },
     { TR_KEY_torrent_rename_path, { torrentRenamePath, true } },
 } };
 

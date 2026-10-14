@@ -9,7 +9,9 @@
 #include <cstdint> // int64_t
 #include <future>
 #include <iterator> // std::inserter
+#include <optional>
 #include <set>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -927,6 +929,113 @@ TEST_F(RpcTest, torrentMerge)
 
     // cleanup
     tr_torrentRemove(dst, false, nullptr, nullptr);
+}
+
+TEST_F(RpcTest, torrentRenameFiles)
+{
+    auto* const tor = zeroTorrentInit(ZeroTorrentState::Complete);
+    ASSERT_NE(nullptr, tor);
+    auto const tor_id = tor->id();
+    auto const download_dir = std::string{ tor->download_dir().sv() };
+
+    auto const exec = [this, tor_id](tr_variant::Vector paths, std::optional<std::string_view> location = {})
+    {
+        auto params = tr_variant::Map{ 3U };
+        params.try_emplace(TR_KEY_ids, tor_id);
+        params.try_emplace(TR_KEY_file_paths, std::move(paths));
+        if (location)
+        {
+            params.try_emplace(TR_KEY_location, *location);
+        }
+
+        auto request_map = tr_variant::Map{ 4U };
+        request_map.try_emplace(TR_KEY_jsonrpc, JsonRpc::Version);
+        request_map.try_emplace(TR_KEY_method, tr_variant::unmanaged_string(TR_KEY_torrent_rename_files));
+        request_map.try_emplace(TR_KEY_id, 12345);
+        request_map.try_emplace(TR_KEY_params, std::move(params));
+
+        auto request = tr_variant{ std::move(request_map) };
+        auto promise = std::promise<tr_variant>{};
+        auto future = promise.get_future();
+        tr_rpc_request_exec(
+            session_,
+            request,
+            [&promise](tr_session* /*session*/, tr_variant&& resp) { promise.set_value(std::move(resp)); });
+        auto response = future.get();
+
+        auto* const response_map = response.get_if<tr_variant::Map>();
+        EXPECT_NE(nullptr, response_map);
+        auto* const result = response_map != nullptr ? response_map->find_if<tr_variant::Map>(TR_KEY_result) : nullptr;
+        return result != nullptr ? std::optional<tr_variant::Map>{ std::move(*result) } : std::nullopt;
+    };
+
+    auto const make_paths = [](std::initializer_list<std::optional<std::string_view>> paths)
+    {
+        auto vec = tr_variant::Vector{};
+        for (auto const& path : paths)
+        {
+            if (path)
+            {
+                vec.emplace_back(*path);
+            }
+            else
+            {
+                vec.emplace_back(nullptr);
+            }
+        }
+        return vec;
+    };
+
+    auto const expect_files = [tor](std::string_view location, std::array<std::string_view, 3U> const& subpaths)
+    {
+        EXPECT_EQ(location, tor->download_dir().sv());
+        for (tr_file_index_t i = 0; i < std::size(subpaths); ++i)
+        {
+            EXPECT_EQ(subpaths[i], tor->file_subpath(i));
+            auto const found = tor->find_file(i);
+            EXPECT_TRUE(found);
+            EXPECT_EQ(tr_pathbuf(location, '/', subpaths[i]), found ? found->filename().sv() : ""sv);
+        }
+    };
+
+    static auto constexpr OriginalSubpaths = std::array<std::string_view, 3U>{
+        "files-filled-with-zeroes/1048576"sv,
+        "files-filled-with-zeroes/4096"sv,
+        "files-filled-with-zeroes/512"sv,
+    };
+
+    // bad requests change nothing
+    EXPECT_FALSE(exec(make_paths({ std::nullopt, std::nullopt })));
+    EXPECT_FALSE(exec(make_paths({ std::nullopt, std::nullopt, "files-filled-with-zeroes/4096" })));
+    EXPECT_FALSE(exec(make_paths({ std::nullopt, std::nullopt, "../512" })));
+    EXPECT_FALSE(exec(make_paths({ std::nullopt, std::nullopt, std::nullopt }), "relative/path"sv));
+    auto paths = make_paths({ std::nullopt, std::nullopt });
+    paths.emplace_back(512);
+    EXPECT_FALSE(exec(std::move(paths)));
+    expect_files(download_dir, OriginalSubpaths);
+
+    // move the top-level folder into the location
+    auto const zeroes_dir = std::string{ tr_pathbuf{ download_dir, "/files-filled-with-zeroes"sv } };
+    auto result = exec(make_paths({ "1048576", "4096", "512" }), zeroes_dir);
+    ASSERT_TRUE(result);
+    EXPECT_EQ(tor_id, result->value_if<int64_t>(TR_KEY_id));
+    EXPECT_EQ("files-filled-with-zeroes"sv, result->value_if<std::string_view>(TR_KEY_name));
+    expect_files(zeroes_dir, { "1048576", "4096", "512" });
+
+    // move files across directories, and back into a common top-level folder
+    result = exec(make_paths({ std::nullopt, "a/b/4096", "c/512" }));
+    ASSERT_TRUE(result);
+    expect_files(zeroes_dir, { "1048576", "a/b/4096", "c/512" });
+    result = exec(make_paths({ "zeroes/1048576", "zeroes/4096", "zeroes/512" }), download_dir);
+    ASSERT_TRUE(result);
+    EXPECT_EQ("zeroes"sv, result->value_if<std::string_view>(TR_KEY_name));
+    expect_files(download_dir, { "zeroes/1048576", "zeroes/4096", "zeroes/512" });
+
+    blockingTorrentVerify(tor);
+    EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
+
+    // cleanup
+    tr_torrentRemove(tor, false, nullptr, nullptr);
 }
 
 TEST_F(RpcTest, torrentGetLegacy)

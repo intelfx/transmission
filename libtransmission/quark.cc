@@ -177,6 +177,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "file-count"sv, // rpc
     "fileStats"sv, // rpc
     "file_count"sv, // rpc
+    "file_paths"sv, // rpc
     "file_stats"sv, // rpc
     "filename"sv, // rpc
     "files"sv, // .resume, .torrent, rpc
@@ -668,6 +669,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "torrent_merge"sv, // rpc
     "torrent_reannounce"sv, // rpc
     "torrent_remove"sv, // rpc
+    "torrent_rename_files"sv, // rpc
     "torrent_rename_path"sv, // rpc
     "torrent_set"sv, // rpc
     "torrent_set_location"sv, // rpc

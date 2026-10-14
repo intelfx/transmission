@@ -575,6 +575,31 @@ Request parameters:
 
 Response parameters: none
 
+### 3.9 Changing a torrent's file paths
+Method name: `torrent_rename_files`
+
+Gives any of a torrent's files a new path, at any depth, and optionally moves
+the torrent to a new location at the same time. The files' local data is moved
+along, one file at a time, but only where the resulting path on disk differs:
+e.g. moving a torrent's top-level folder into its location doesn't touch the
+data at all. Either all of the changes are made, or none of them.
+
+Request parameters:
+
+| Key | Value Type | Description
+|:--|:--|:--
+| `ids` | array | the torrent list, as described in 3.1 (must only be 1 torrent)
+| `file_paths` | array | one entry per file, in the order of `files` in 3.3: the file's new path, relative to the torrent's location, or `null` to keep its path
+| `location` | string | the torrent's new location, as an absolute path (optional). The data in the old location moves there; data in the incomplete directory stays in it.
+
+The new paths must not contain empty, `.` or `..` components, no two files may
+get the same path, and no file may get a path inside another file's path.
+If any of the files ends up at a path that already exists on disk, nothing is
+changed. If all the files end up in a new common top-level folder, it becomes
+the torrent's `name`.
+
+Response parameters: `id`, holding the torrent ID integer, and `name`, holding the torrent's (new) name
+
 ## 4  Session requests
 ### 4.1 Session parameters
 | Key | Value Type | Description
@@ -1135,3 +1160,4 @@ Unreleased (`rpc_version_semver` 6.1.0, `rpc_version`: 20)
 | `session_set` | new arg `proxy_rules`
 | `session_set` | new arg `proxy_url`
 | `torrent_merge` | new method
+| `torrent_rename_files` | new method
