@@ -185,6 +185,17 @@ struct tr_torrent
 
     void set_location(std::string_view location, bool move_from_old_path, int volatile* setme_state);
 
+    using SetFilePathsDoneFunc = std::function<void(tr_error const& error)>;
+
+    // Gives the files new paths and moves their local data along.
+    // `paths` has one entry per file; an empty entry keeps that file's path.
+    // If `location` is set, it becomes the download dir, and the data that is
+    // in the old download dir moves there. Either all of it happens, or none.
+    void set_file_paths(
+        std::vector<std::optional<std::string>> paths,
+        std::optional<std::string> location,
+        SetFilePathsDoneFunc&& callback);
+
     void rename_path(
         std::string_view oldpath,
         std::string_view newname,
@@ -1333,6 +1344,14 @@ private:
     void update_file_path(tr_file_index_t file, std::optional<bool> has_file) const;
 
     void set_location_in_session_thread(std::string_view path, bool move_from_old_path, int volatile* setme_state);
+
+    bool set_file_paths_in_session_thread(
+        std::vector<std::optional<std::string>> const& paths,
+        std::optional<std::string_view> location,
+        tr_error* error);
+
+    // Updates the file paths and the name, but not the local data.
+    void set_file_subpaths(std::vector<std::string> const& subpaths);
 
     void rename_path_in_session_thread(
         std::string_view oldpath,

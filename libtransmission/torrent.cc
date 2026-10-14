@@ -2328,6 +2328,164 @@ void tr_torrent::refresh_current_dir()
     current_dir_ = dir;
 }
 
+// --- FILE PATHS
+
+namespace
+{
+namespace file_paths_helpers
+{
+// Returns the first path component if all the paths share it.
+template<typename GetPath>
+[[nodiscard]] std::optional<std::string> common_top_level(tr_file_index_t n_files, GetPath const& get_path)
+{
+    if (n_files == 0U)
+    {
+        return {};
+    }
+
+    auto const first = std::string_view{ get_path(0U) };
+    auto const top = first.substr(0, first.find('/'));
+
+    for (tr_file_index_t i = 1U; i < n_files; ++i)
+    {
+        auto const path = std::string_view{ get_path(i) };
+        if (!tr_strv_starts_with(path, top) || (std::size(path) > std::size(top) && path[std::size(top)] != '/'))
+        {
+            return {};
+        }
+    }
+
+    return std::string{ top };
+}
+} // namespace file_paths_helpers
+} // namespace
+
+void tr_torrent::set_file_subpaths(std::vector<std::string> const& subpaths)
+{
+    using namespace file_paths_helpers;
+
+    TR_ASSERT(std::size(subpaths) == file_count());
+
+    auto const n_files = file_count();
+    auto const old_top = common_top_level(n_files, [this](tr_file_index_t i) -> std::string const& { return file_subpath(i); });
+
+    for (tr_file_index_t i = 0U; i < n_files; ++i)
+    {
+        set_file_subpath(i, subpaths[i]);
+    }
+
+    if (auto const new_top = common_top_level(
+            n_files,
+            [&subpaths](tr_file_index_t i) -> std::string const& { return subpaths[i]; });
+        new_top && new_top != old_top)
+    {
+        set_name(*new_top);
+    }
+
+    mark_edited();
+    set_dirty();
+    mark_changed();
+}
+
+bool tr_torrent::set_file_paths_in_session_thread(
+    std::vector<std::optional<std::string>> const& paths,
+    std::optional<std::string_view> const location,
+    tr_error* const error)
+{
+    TR_ASSERT(session->am_in_session_thread());
+    TR_ASSERT(error != nullptr);
+
+    if (!has_metainfo())
+    {
+        error->set(EINVAL, "the torrent's files are not known yet"sv);
+        return false;
+    }
+
+    if (location && (std::empty(*location) || tr_sys_path_is_relative(*location)))
+    {
+        error->set(EINVAL, "the new location is not an absolute path"sv);
+        return false;
+    }
+
+    auto const subpaths = files().resolve_paths(paths, error);
+    if (!subpaths)
+    {
+        return false;
+    }
+
+    auto const was_verifying = verify_state_ != VerifyState::None;
+    session->close_torrent_files(id());
+    session->verify_remove(this);
+
+    auto old_bases = std::array<std::string_view, 2U>{};
+    auto new_bases = std::array<std::string_view, 2U>{};
+    auto n_bases = size_t{};
+    if (auto const& dir = download_dir(); !std::empty(dir))
+    {
+        old_bases[n_bases] = dir.sv();
+        new_bases[n_bases] = location.value_or(dir.sv());
+        ++n_bases;
+    }
+    if (auto const& dir = incomplete_dir(); !std::empty(dir))
+    {
+        old_bases[n_bases] = dir.sv();
+        new_bases[n_bases] = dir.sv();
+        ++n_bases;
+    }
+
+    auto const ok = files().relocate(*subpaths, std::data(old_bases), std::data(new_bases), n_bases, error);
+    if (ok)
+    {
+        set_file_subpaths(*subpaths);
+
+        if (location && *location != download_dir().sv())
+        {
+            set_download_dir(*location);
+        }
+        else
+        {
+            refresh_current_dir();
+        }
+    }
+
+    if (was_verifying)
+    {
+        session->verify_add(this);
+    }
+
+    return ok;
+}
+
+void tr_torrent::set_file_paths(
+    std::vector<std::optional<std::string>> paths,
+    std::optional<std::string> location,
+    SetFilePathsDoneFunc&& callback)
+{
+    session->run_in_session_thread(
+        [session = session,
+         tor_id = id(),
+         paths = std::move(paths),
+         location = std::move(location),
+         callback = std::move(callback)]()
+        {
+            auto error = tr_error{};
+
+            if (auto* const tor = session->torrents().get(tor_id); tor == nullptr || tor->is_deleting_)
+            {
+                error.set(ENOENT, "the torrent was removed"sv);
+            }
+            else
+            {
+                tor->set_file_paths_in_session_thread(paths, location, &error);
+            }
+
+            if (callback)
+            {
+                callback(error);
+            }
+        });
+}
+
 // --- RENAME
 
 namespace

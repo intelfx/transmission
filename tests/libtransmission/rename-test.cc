@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <cstddef> // size_t
 #include <cstdint> // uint32_t, uint64_t
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -125,6 +126,44 @@ protected:
         };
         EXPECT_TRUE(waitFor(test, MaxWaitMsec));
         return error;
+    }
+
+    static tr_error setFilePathsAndWait(
+        tr_torrent* tor,
+        std::vector<std::optional<std::string>> paths,
+        std::optional<std::string> location = {})
+    {
+        auto result = std::optional<tr_error>{};
+        tor->set_file_paths(std::move(paths), std::move(location), [&result](tr_error const& error) { result = error; });
+        EXPECT_TRUE(waitFor([&result]() { return result.has_value(); }, MaxWaitMsec));
+        return result.value_or(tr_error{ ETIMEDOUT, "timed out" });
+    }
+
+    static constexpr auto MultifileTorrentBase64 =
+        "ZDEwOmNyZWF0ZWQgYnkyNTpUcmFuc21pc3Npb24vMi42MSAoMTM0MDcpMTM6Y3JlYXRpb24gZGF0"
+        "ZWkxMzU4NTU1NDIwZTg6ZW5jb2Rpbmc1OlVURi04NDppbmZvZDU6ZmlsZXNsZDY6bGVuZ3RoaTI4"
+        "ZTQ6cGF0aGw3OkZlbGluYWU4OkFjaW5vbnl4NzpDaGVldGFoNzpDaGVzdGVyZWVkNjpsZW5ndGhp"
+        "MTJlNDpwYXRobDc6RmVsaW5hZTU6RmVsaXM1OmNhdHVzNTpLeXBoaWVlZDY6bGVuZ3RoaTZlNDpw"
+        "YXRobDc6RmVsaW5hZTU6RmVsaXM1OmNhdHVzNzpTYWZmcm9uZWVkNjpsZW5ndGhpMjFlNDpwYXRo"
+        "bDExOlBhbnRoZXJpbmFlODpQYW50aGVyYTU6VGlnZXI0OlRvbnllZWU0Om5hbWU3OkZlbGlkYWUx"
+        "MjpwaWVjZSBsZW5ndGhpMzI3NjhlNjpwaWVjZXMyMDp27buFkmy8ICfNX4nsJmt0Ckm2Ljc6cHJp"
+        "dmF0ZWkwZWVl";
+
+    static constexpr auto MultifileTorrentContents = std::array<std::string_view, 4>{
+        "It ain't easy bein' cheesy.\n"sv,
+        "Inquisitive\n"sv,
+        "Tough\n"sv,
+        "They’re Grrrrreat!\n"sv,
+    };
+
+    static void expectMultifileTorrentFiles(tr_torrent const* tor, std::array<std::string_view, 4> const& subpaths)
+    {
+        EXPECT_EQ(std::size(subpaths), tor->file_count());
+        for (tr_file_index_t i = 0; i < std::size(subpaths); ++i)
+        {
+            EXPECT_EQ(subpaths[i], tor->file_subpath(i));
+            EXPECT_TRUE(testFileExistsAndConsistsOfThisString(tor, i, MultifileTorrentContents[i])) << subpaths[i];
+        }
     }
 };
 
@@ -428,6 +467,67 @@ TEST_F(RenameTest, multifileTorrent)
     /***
     ****
     ***/
+
+    // cleanup
+    tr_ctorFree(ctor);
+    torrentRemoveAndWait(tor, 0);
+}
+
+/***
+****
+***/
+
+TEST_F(RenameTest, setFilePaths)
+{
+    auto* const ctor = tr_ctorNew(session_);
+    auto* const tor = createTorrentFromBase64Metainfo(ctor, MultifileTorrentBase64);
+    EXPECT_TRUE(tr_isTorrent(tor));
+    auto const download_dir = std::string{ tor->download_dir().sv() };
+    createMultifileTorrentContents(download_dir);
+    blockingTorrentVerify(tor);
+    EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
+
+    // a file of another torrent shares a directory with this one's
+    auto const foreign = tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/catus/Garfield"sv };
+    createFileWithContents(foreign, "Lasagna\n");
+
+    // move files across directories; nullopt keeps a file's path
+    auto error = setFilePathsAndWait(tor, { "Chester", std::nullopt, "Felidae/Saffron", "Tony/Tony" });
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(tor, { "Chester", "Felidae/Felinae/Felis/catus/Kyphi", "Felidae/Saffron", "Tony/Tony" });
+    EXPECT_STREQ("Felidae", tr_torrentName(tor));
+    EXPECT_TRUE(tr_sys_path_exists(foreign));
+    EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Felinae/Acinonyx"sv }));
+    EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Pantherinae"sv }));
+
+    // invalid paths change nothing
+    error = setFilePathsAndWait(tor, { "Tony/Tony/Chester", std::nullopt, std::nullopt, std::nullopt });
+    EXPECT_EQ(EINVAL, error.code());
+    expectMultifileTorrentFiles(tor, { "Chester", "Felidae/Felinae/Felis/catus/Kyphi", "Felidae/Saffron", "Tony/Tony" });
+
+    // a new common top-level directory becomes the torrent's name
+    error = setFilePathsAndWait(tor, { "Cats/Chester", "Cats/Kyphi", "Cats/Saffron", "Cats/Tony" });
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(tor, { "Cats/Chester", "Cats/Kyphi", "Cats/Saffron", "Cats/Tony" });
+    EXPECT_STREQ("Cats", tr_torrentName(tor));
+
+    // move the top-level directory into the location: the data stays where it is
+    auto const cats_dir = std::string{ tr_pathbuf{ download_dir, "/Cats"sv } };
+    error = setFilePathsAndWait(tor, { "Chester", "Kyphi", "Saffron", "Tony" }, cats_dir);
+    EXPECT_FALSE(error) << error;
+    EXPECT_EQ(cats_dir, tor->download_dir().sv());
+    expectMultifileTorrentFiles(tor, { "Chester", "Kyphi", "Saffron", "Tony" });
+    EXPECT_STREQ("Cats", tr_torrentName(tor));
+
+    // ...and back again
+    error = setFilePathsAndWait(tor, { "Cats/Chester", "Cats/Kyphi", "Cats/Saffron", "Cats/Tony" }, download_dir);
+    EXPECT_FALSE(error) << error;
+    EXPECT_EQ(download_dir, tor->download_dir().sv());
+    expectMultifileTorrentFiles(tor, { "Cats/Chester", "Cats/Kyphi", "Cats/Saffron", "Cats/Tony" });
+    EXPECT_STREQ("Cats", tr_torrentName(tor));
+
+    blockingTorrentVerify(tor);
+    EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
 
     // cleanup
     tr_ctorFree(ctor);
