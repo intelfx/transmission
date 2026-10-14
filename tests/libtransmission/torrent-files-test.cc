@@ -5,19 +5,28 @@
 
 #include <array>
 #include <cassert>
+#include <cerrno>
 #include <cstddef> // size_t
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/stat.h> // chmod()
+#include <unistd.h> // geteuid()
+#endif
+
 #include <libtransmission/transmission.h>
 
+#include <libtransmission/error.h>
 #include <libtransmission/file.h>
 #include <libtransmission/torrent-files.h>
 #include <libtransmission/torrent-metainfo.h>
 #include "libtransmission/tr-macros.h"
 #include <libtransmission/tr-strbuf.h>
+#include <libtransmission/utils.h>
 
 #include "gtest/gtest.h"
 #include "test-fixtures.h"
@@ -26,6 +35,42 @@ using namespace std::literals;
 
 class TorrentFilesTest : public ::libtransmission::test::SandboxedTest
 {
+protected:
+    [[nodiscard]] static std::optional<std::string> readFile(std::string_view filename)
+    {
+        auto contents = std::vector<char>{};
+        if (!tr_file_read(filename, contents))
+        {
+            return {};
+        }
+        return std::string{ std::data(contents), std::size(contents) };
+    }
+
+    // Creates each file under `base`, holding its own subpath as contents.
+    static void createFiles(std::string_view base, std::initializer_list<std::string_view> subpaths)
+    {
+        for (auto const subpath : subpaths)
+        {
+            createFileWithContents(tr_pathbuf{ base, '/', subpath }, subpath);
+        }
+    }
+
+    static void expectFile(std::string_view base, std::string_view subpath, std::string_view contents)
+    {
+        EXPECT_EQ(std::optional<std::string>{ contents }, readFile(tr_pathbuf{ base, '/', subpath })) << subpath;
+    }
+
+    static void expectNoFile(std::string_view base, std::string_view subpath)
+    {
+        EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ base, '/', subpath })) << subpath;
+    }
+
+    [[nodiscard]] bool relocate(tr_torrent_files const& files, std::vector<std::string> const& new_paths, tr_error* error) const
+    {
+        auto const base = sandboxDir();
+        auto const bases = std::array<std::string_view, 1U>{ base };
+        return files.relocate(new_paths, std::data(bases), std::data(bases), std::size(bases), error);
+    }
 };
 
 TEST_F(TorrentFilesTest, add)
@@ -201,3 +246,203 @@ TEST_F(TorrentFilesTest, isSubpathPortable)
         EXPECT_EQ(expected, tr_torrent_files::is_subpath_sanitized(subpath)) << " subpath " << subpath;
     }
 }
+
+TEST_F(TorrentFilesTest, resolvePaths)
+{
+    auto files = tr_torrent_files{};
+    files.add("top/a/1"sv, 1U);
+    files.add("top/a/2"sv, 1U);
+    files.add("top/b"sv, 1U);
+
+    using Paths = std::vector<std::optional<std::string>>;
+    auto error = tr_error{};
+
+    // nullopt keeps a file's current path
+    auto resolved = files.resolve_paths(Paths{ "1", std::nullopt, "x/y/b" }, &error);
+    EXPECT_FALSE(error) << error;
+    EXPECT_EQ((std::optional<std::vector<std::string>>{ { "1", "top/a/2", "x/y/b" } }), resolved);
+
+    // one path per file
+    EXPECT_FALSE(files.resolve_paths(Paths{ "1", "2" }, &error));
+    EXPECT_EQ(EINVAL, error.code());
+    error = {};
+
+    // only relative paths without empty, '.' or '..' components
+    for (auto const* const bad : { "", "/1", "1/", "a//1", "a/./1", "a/../1", "../1", ".", ".." })
+    {
+        EXPECT_FALSE(files.resolve_paths(Paths{ bad, std::nullopt, std::nullopt }, &error)) << bad;
+        EXPECT_EQ(EINVAL, error.code()) << bad;
+        error = {};
+    }
+
+    // no two files at the same path
+    EXPECT_FALSE(files.resolve_paths(Paths{ "top/b", std::nullopt, std::nullopt }, &error));
+    EXPECT_EQ(EINVAL, error.code());
+    error = {};
+
+    // no file at another file's directory
+    EXPECT_FALSE(files.resolve_paths(Paths{ "top/b/1", std::nullopt, std::nullopt }, &error));
+    EXPECT_EQ(EINVAL, error.code());
+    error = {};
+    EXPECT_FALSE(files.resolve_paths(Paths{ std::nullopt, std::nullopt, "top/a" }, &error));
+    EXPECT_EQ(EINVAL, error.code());
+    error = {};
+}
+
+TEST_F(TorrentFilesTest, relocateAcrossDirectories)
+{
+    auto const base = sandboxDir();
+    createFiles(base, { "top/a/1", "top/a/2", "top/b/3", "top/a/foreign" });
+
+    auto files = tr_torrent_files{};
+    files.add("top/a/1"sv, 1U);
+    files.add("top/a/2"sv, 1U);
+    files.add("top/b/3"sv, 1U);
+    files.add("top/c/4"sv, 1U); // no local data
+
+    auto error = tr_error{};
+    EXPECT_TRUE(relocate(files, { "1", "x/y/2", "top/b/3", "z/4" }, &error));
+    EXPECT_FALSE(error) << error;
+
+    expectFile(base, "1", "top/a/1");
+    expectFile(base, "x/y/2", "top/a/2");
+    expectFile(base, "top/b/3", "top/b/3");
+    expectNoFile(base, "z");
+
+    // files of others are not moved, and their directories are kept
+    expectFile(base, "top/a/foreign", "top/a/foreign");
+    expectNoFile(base, "top/a/1");
+    expectNoFile(base, "top/a/2");
+}
+
+TEST_F(TorrentFilesTest, relocatePrunesEmptiedDirectories)
+{
+    auto const base = sandboxDir();
+    createFiles(base, { "top/a/1", "top/a/b/2" });
+
+    auto files = tr_torrent_files{};
+    files.add("top/a/1"sv, 1U);
+    files.add("top/a/b/2"sv, 1U);
+
+    auto error = tr_error{};
+    EXPECT_TRUE(relocate(files, { "1", "2" }, &error));
+    EXPECT_FALSE(error) << error;
+    expectFile(base, "1", "top/a/1");
+    expectFile(base, "2", "top/a/b/2");
+    expectNoFile(base, "top");
+    EXPECT_TRUE(tr_sys_path_exists(base));
+}
+
+TEST_F(TorrentFilesTest, relocateFilesInTheWay)
+{
+    auto const base = sandboxDir();
+    createFiles(base, { "a", "b", "X", "Z/z" });
+
+    auto files = tr_torrent_files{};
+    files.add("a"sv, 1U);
+    files.add("b"sv, 1U);
+    files.add("X"sv, 1U);
+    files.add("Z/z"sv, 1U);
+
+    // swap two files, and turn a file into a directory of the same name
+    auto error = tr_error{};
+    EXPECT_TRUE(relocate(files, { "b", "a", "X/x", "X/z" }, &error));
+    EXPECT_FALSE(error) << error;
+    expectFile(base, "a", "b");
+    expectFile(base, "b", "a");
+    expectFile(base, "X/x", "X");
+    expectFile(base, "X/z", "Z/z");
+    expectNoFile(base, "Z");
+}
+
+TEST_F(TorrentFilesTest, relocateKeepsPartialSuffix)
+{
+    auto const base = sandboxDir();
+    createFiles(base, { "a/1.part", "a/2" });
+
+    auto files = tr_torrent_files{};
+    files.add("a/1"sv, 1U);
+    files.add("a/2"sv, 1U);
+
+    auto error = tr_error{};
+    EXPECT_TRUE(relocate(files, { "b/1", "b/2" }, &error));
+    EXPECT_FALSE(error) << error;
+    expectFile(base, "b/1.part", "a/1.part");
+    expectFile(base, "b/2", "a/2");
+    expectNoFile(base, "b/1");
+}
+
+TEST_F(TorrentFilesTest, relocateBetweenBases)
+{
+    auto const download_dir = tr_pathbuf{ sandboxDir(), "/Downloads"sv };
+    auto const incomplete_dir = tr_pathbuf{ sandboxDir(), "/Incomplete"sv };
+    auto const new_download_dir = tr_pathbuf{ sandboxDir(), "/Downloads/top"sv };
+    createFiles(download_dir, { "top/1" });
+    createFiles(incomplete_dir, { "top/2.part" });
+
+    auto files = tr_torrent_files{};
+    files.add("top/1"sv, 1U);
+    files.add("top/2"sv, 1U);
+
+    auto const old_bases = std::array<std::string_view, 2U>{ download_dir, incomplete_dir };
+    auto const new_bases = std::array<std::string_view, 2U>{ new_download_dir, incomplete_dir };
+    auto error = tr_error{};
+    EXPECT_TRUE(files.relocate({ "1", "2" }, std::data(old_bases), std::data(new_bases), std::size(old_bases), &error));
+    EXPECT_FALSE(error) << error;
+
+    // the file in the download dir stays where it is,
+    // but the one in the incomplete dir loses its top-level directory
+    expectFile(new_download_dir, "1", "top/1");
+    expectFile(incomplete_dir, "2.part", "top/2.part");
+    expectNoFile(incomplete_dir, "top");
+}
+
+TEST_F(TorrentFilesTest, relocateRefusesToOverwrite)
+{
+    auto const base = sandboxDir();
+    createFiles(base, { "a", "b", "foreign" });
+
+    auto files = tr_torrent_files{};
+    files.add("a"sv, 1U);
+    files.add("b"sv, 1U);
+
+    auto error = tr_error{};
+    EXPECT_FALSE(relocate(files, { "c", "foreign" }, &error));
+    EXPECT_EQ(EEXIST, error.code());
+    expectFile(base, "a", "a");
+    expectFile(base, "b", "b");
+    expectFile(base, "foreign", "foreign");
+    expectNoFile(base, "c");
+}
+
+#ifndef _WIN32
+TEST_F(TorrentFilesTest, relocateRollsBackOnFailure)
+{
+    if (geteuid() == 0)
+    {
+        GTEST_SKIP() << "root ignores directory permissions";
+    }
+
+    auto const base = sandboxDir();
+    createFiles(base, { "a", "b", "c" });
+    auto const read_only_dir = tr_pathbuf{ base, "/read-only"sv };
+    EXPECT_TRUE(tr_sys_dir_create(read_only_dir, 0, 0555));
+
+    auto files = tr_torrent_files{};
+    files.add("a"sv, 1U);
+    files.add("b"sv, 1U);
+    files.add("c"sv, 1U);
+
+    // swap "a" and "b", then fail to move "c"
+    auto error = tr_error{};
+    EXPECT_FALSE(relocate(files, { "moved/b", "a", "read-only/c" }, &error));
+    EXPECT_TRUE(error);
+    EXPECT_EQ(std::string_view::npos, error.message().find("moved back")) << error;
+    expectFile(base, "a", "a");
+    expectFile(base, "b", "b");
+    expectFile(base, "c", "c");
+    expectNoFile(base, "moved");
+
+    chmod(read_only_dir, 0755);
+}
+#endif

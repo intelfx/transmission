@@ -116,6 +116,26 @@ public:
         std::string_view parent_name = "",
         tr_error* error = nullptr) const;
 
+    // Returns the paths that the files get when some of them are replaced.
+    // `paths` has one entry per file; an empty entry keeps the current path.
+    // Fails if a path is not a valid relative path, if two files would get the
+    // same path, or if a file's path would be a directory of another file.
+    [[nodiscard]] std::optional<std::vector<std::string>> resolve_paths(
+        std::vector<std::optional<std::string>> const& paths,
+        tr_error* error = nullptr) const;
+
+    // Moves the local data of every file from its current path to `new_paths`.
+    // Data found under `old_bases[i]` is moved under `new_bases[i]`.
+    // Files are moved one by one, so files of other torrents that share a
+    // directory stay where they are. Either all files get moved, or none:
+    // on failure, the files that were already moved are moved back.
+    bool relocate(
+        std::vector<std::string> const& new_paths,
+        std::string_view const* old_bases,
+        std::string_view const* new_bases,
+        size_t n_bases,
+        tr_error* error = nullptr) const;
+
     // Removes `dir` and then each of its parents, as long as they are empty
     // directories, but never `stop_at` or anything outside of it.
     static void prune_empty_dirs(std::string_view dir, std::string_view stop_at);

@@ -13,7 +13,10 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -21,9 +24,11 @@
 
 #include "libtransmission/transmission.h"
 
+#include "libtransmission/error.h"
 #include "libtransmission/file.h"
 #include "libtransmission/log.h"
 #include "libtransmission/torrent-files.h"
+#include "libtransmission/tr-assert.h"
 #include "libtransmission/tr-strbuf.h"
 #include "libtransmission/utils.h"
 
@@ -88,6 +93,40 @@ void depth_first_walk(char const* path, file_func_t const& func, std::optional<i
     }
 
     func(path);
+}
+
+[[nodiscard]] bool is_valid_subpath(std::string_view path)
+{
+    if (std::empty(path) || path.front() == '/' || path.back() == '/' || !tr_torrent_files::is_subpath_sanitized(path))
+    {
+        return false;
+    }
+
+    auto segment = std::string_view{};
+    while (tr_strv_sep(&path, &segment, '/'))
+    {
+        if (std::empty(segment) || segment == "."sv || segment == ".."sv)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void set_move_error(tr_error* error, std::string_view old_path, std::string_view path, int code, std::string_view message)
+{
+    if (error != nullptr)
+    {
+        error->set(
+            code,
+            fmt::format(
+                fmt::runtime(_("Couldn't move '{old_path}' to '{path}': {error} ({error_code})")),
+                fmt::arg("old_path", old_path),
+                fmt::arg("path", path),
+                fmt::arg("error", message),
+                fmt::arg("error_code", code)));
+    }
 }
 
 bool is_junk_file(std::string_view filename)
@@ -236,6 +275,244 @@ bool tr_torrent_files::move(
     }
 
     return !err;
+}
+
+std::optional<std::vector<std::string>> tr_torrent_files::resolve_paths(
+    std::vector<std::optional<std::string>> const& paths,
+    tr_error* error) const
+{
+    auto const n_files = file_count();
+    if (std::size(paths) != n_files)
+    {
+        if (error != nullptr)
+        {
+            error->set(EINVAL, fmt::format("expected {:d} file paths, got {:d}", n_files, std::size(paths)));
+        }
+        return {};
+    }
+
+    auto ret = std::vector<std::string>{};
+    ret.reserve(n_files);
+    for (tr_file_index_t i = 0; i < n_files; ++i)
+    {
+        if (!paths[i])
+        {
+            ret.emplace_back(path(i));
+        }
+        else if (is_valid_subpath(*paths[i]))
+        {
+            ret.emplace_back(*paths[i]);
+        }
+        else
+        {
+            if (error != nullptr)
+            {
+                error->set(EINVAL, fmt::format("invalid path '{:s}' for file #{:d}", *paths[i], i));
+            }
+            return {};
+        }
+    }
+
+    auto file_by_path = std::unordered_map<std::string_view, tr_file_index_t>{};
+    file_by_path.reserve(n_files);
+    for (tr_file_index_t i = 0; i < n_files; ++i)
+    {
+        if (auto const [iter, inserted] = file_by_path.try_emplace(ret[i], i); !inserted)
+        {
+            if (error != nullptr)
+            {
+                error->set(EINVAL, fmt::format("files #{:d} and #{:d} have the same path '{:s}'", iter->second, i, ret[i]));
+            }
+            return {};
+        }
+    }
+
+    for (tr_file_index_t i = 0; i < n_files; ++i)
+    {
+        auto const sv = std::string_view{ ret[i] };
+        for (auto pos = sv.find('/'); pos != std::string_view::npos; pos = sv.find('/', pos + 1))
+        {
+            if (auto const iter = file_by_path.find(sv.substr(0, pos)); iter != std::end(file_by_path))
+            {
+                if (error != nullptr)
+                {
+                    error->set(EINVAL, fmt::format("path '{:s}' of file #{:d} is inside file #{:d}", ret[i], i, iter->second));
+                }
+                return {};
+            }
+        }
+    }
+
+    return ret;
+}
+
+bool tr_torrent_files::relocate(
+    std::vector<std::string> const& new_paths,
+    std::string_view const* old_bases,
+    std::string_view const* new_bases,
+    size_t n_bases,
+    tr_error* error) const
+{
+    TR_ASSERT(std::size(new_paths) == file_count());
+
+    struct Move
+    {
+        std::string src;
+        std::string dst;
+        std::string tmp; // where `src` is parked while other files move, if needed
+        std::string_view old_base;
+        std::string_view new_base;
+
+        [[nodiscard]] std::string const& from() const noexcept
+        {
+            return std::empty(tmp) ? src : tmp;
+        }
+    };
+
+    auto moves = std::vector<Move>{};
+    for (tr_file_index_t i = 0, n = file_count(); i < n; ++i)
+    {
+        auto const found = find(i, old_bases, n_bases);
+        if (!found)
+        {
+            continue;
+        }
+
+        auto const base = found->base();
+        auto const base_idx = static_cast<size_t>(std::find(old_bases, old_bases + n_bases, base) - old_bases);
+        TR_ASSERT(base_idx < n_bases);
+        auto const suffix = found->filename().sv().substr(std::size(base) + 1U + std::size(path(i)));
+
+        auto move = Move{};
+        move.src = found->filename().sv();
+        move.dst = tr_pathbuf{ new_bases[base_idx], '/', new_paths[i], suffix }.sv();
+        move.old_base = old_bases[base_idx];
+        move.new_base = new_bases[base_idx];
+        if (move.src != move.dst)
+        {
+            moves.emplace_back(std::move(move));
+        }
+    }
+
+    // Refuse to overwrite anything but the files that are being moved away.
+    auto srcs = std::unordered_set<std::string_view>{};
+    srcs.reserve(std::size(moves));
+    for (auto const& move : moves)
+    {
+        srcs.emplace(move.src);
+    }
+
+    for (auto const& move : moves)
+    {
+        if (tr_sys_path_exists(move.dst) && srcs.count(move.dst) == 0U && !tr_sys_path_is_same(move.src, move.dst))
+        {
+            set_move_error(error, move.src, move.dst, EEXIST, tr_strerror(EEXIST));
+            return false;
+        }
+    }
+
+    // A file that is in the way of another one (it is at that file's new path,
+    // or at one of its new parent directories) is moved out of the way first.
+    auto in_the_way = std::unordered_set<std::string_view>{};
+    for (auto const& move : moves)
+    {
+        auto const dst = std::string_view{ move.dst };
+        in_the_way.emplace(dst);
+        for (auto pos = dst.find('/'); pos != std::string_view::npos; pos = dst.find('/', pos + 1))
+        {
+            in_the_way.emplace(dst.substr(0, pos));
+        }
+    }
+
+    auto const undo = [&](size_t n_parked, size_t n_moved)
+    {
+        auto ok = true;
+
+        for (size_t i = n_moved; i > 0; --i)
+        {
+            auto const& move = moves[i - 1];
+            if (auto local_error = tr_error{}; !tr_file_move(move.dst, move.from(), true, &local_error))
+            {
+                ok = false;
+                tr_logAddError(
+                    fmt::format("Couldn't move '{:s}' back to '{:s}': {:s}", move.dst, move.from(), local_error.message()));
+            }
+            prune_empty_dirs(tr_sys_path_dirname(move.dst), move.new_base);
+        }
+
+        for (size_t i = n_parked; i > 0; --i)
+        {
+            auto const& move = moves[i - 1];
+            if (auto local_error = tr_error{}; !std::empty(move.tmp) && !tr_sys_path_rename(move.tmp, move.src, &local_error))
+            {
+                ok = false;
+                tr_logAddError(
+                    fmt::format("Couldn't move '{:s}' back to '{:s}': {:s}", move.tmp, move.src, local_error.message()));
+            }
+        }
+
+        if (!ok && error != nullptr)
+        {
+            error->prefix_message("Some files could not be moved back (see the log): ");
+        }
+    };
+
+    for (size_t i = 0, n = std::size(moves); i < n; ++i)
+    {
+        auto& move = moves[i];
+        if (in_the_way.count(move.src) == 0U)
+        {
+            continue;
+        }
+
+        for (size_t attempt = 0;; ++attempt)
+        {
+            move.tmp = fmt::format("{:s}.tr-rename-{:d}", move.src, attempt);
+            if (in_the_way.count(move.tmp) == 0U && !tr_sys_path_exists(move.tmp))
+            {
+                break;
+            }
+        }
+
+        tr_logAddTrace(fmt::format("Moving '{:s}' out of the way to '{:s}'", move.src, move.tmp));
+        if (auto local_error = tr_error{}; !tr_sys_path_rename(move.src, move.tmp, &local_error))
+        {
+            set_move_error(error, move.src, move.tmp, local_error.code(), local_error.message());
+            move.tmp.clear();
+            undo(i, 0U);
+            return false;
+        }
+    }
+
+    for (size_t i = 0, n = std::size(moves); i < n; ++i)
+    {
+        auto const& move = moves[i];
+        tr_logAddTrace(fmt::format("Moving '{:s}' to '{:s}'", move.from(), move.dst));
+
+        auto local_error = tr_error{};
+        if (tr_sys_path_exists(move.dst) && !tr_sys_path_is_same(move.from(), move.dst))
+        {
+            local_error.set(EEXIST, tr_strerror(EEXIST));
+        }
+        else
+        {
+            tr_file_move(move.from(), move.dst, true, &local_error);
+        }
+
+        if (local_error)
+        {
+            set_move_error(error, move.src, move.dst, local_error.code(), local_error.message());
+            undo(n, i);
+            return false;
+        }
+    }
+
+    for (auto const& move : moves)
+    {
+        prune_empty_dirs(tr_sys_path_dirname(move.src), move.old_base);
+    }
+
+    return true;
 }
 
 void tr_torrent_files::prune_empty_dirs(std::string_view const dir_in, std::string_view const stop_at)
