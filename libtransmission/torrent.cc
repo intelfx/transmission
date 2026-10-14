@@ -2543,6 +2543,57 @@ auto renameFindAffectedFiles(tr_torrent const* tor, std::string_view oldpath)
 } // namespace rename_helpers
 } // namespace
 
+bool tr_torrent::move_path_in_session_thread(
+    std::string_view const oldpath,
+    std::string_view const newpath,
+    tr_error* const error)
+{
+    using namespace rename_helpers;
+
+    auto const file_indices = std::empty(oldpath) ? std::vector<tr_file_index_t>{} : renameFindAffectedFiles(this, oldpath);
+    if (std::empty(file_indices))
+    {
+        error->set(EINVAL, fmt::format("'{:s}' is not a file or folder of the torrent", oldpath));
+        return false;
+    }
+
+    auto paths = std::vector<std::optional<std::string>>(file_count());
+    for (auto const file_index : file_indices)
+    {
+        auto const subpath = std::string_view{ file_subpath(file_index) };
+        paths[file_index] = tr_pathbuf{ newpath, subpath.substr(std::size(oldpath)) }.sv();
+    }
+
+    return set_file_paths_in_session_thread(paths, {}, error);
+}
+
+void tr_torrent::move_path(std::string_view oldpath, std::string_view newpath, SetFilePathsDoneFunc&& callback)
+{
+    session->run_in_session_thread(
+        [session = session,
+         tor_id = id(),
+         oldpath = std::string{ oldpath },
+         newpath = std::string{ newpath },
+         callback = std::move(callback)]()
+        {
+            auto error = tr_error{};
+
+            if (auto* const tor = session->torrents().get(tor_id); tor == nullptr || tor->is_deleting_)
+            {
+                error.set(ENOENT, "the torrent was removed"sv);
+            }
+            else
+            {
+                tor->move_path_in_session_thread(oldpath, newpath, &error);
+            }
+
+            if (callback)
+            {
+                callback(error);
+            }
+        });
+}
+
 void tr_torrent::rename_path_in_session_thread(
     std::string_view const oldpath,
     std::string_view const newname,
@@ -2557,23 +2608,12 @@ void tr_torrent::rename_path_in_session_thread(
     {
         error = EINVAL;
     }
-    else if (auto const file_indices = renameFindAffectedFiles(this, oldpath); std::empty(file_indices))
-    {
-        error = EINVAL;
-    }
     else
     {
         auto const newpath = tr_strv_contains(oldpath, '/') ? tr_pathbuf{ tr_sys_path_dirname(oldpath), '/', newname } :
                                                               tr_pathbuf{ newname };
 
-        auto paths = std::vector<std::optional<std::string>>(file_count());
-        for (auto const file_index : file_indices)
-        {
-            auto const subpath = std::string_view{ file_subpath(file_index) };
-            paths[file_index] = tr_pathbuf{ newpath, subpath.substr(std::size(oldpath)) }.sv();
-        }
-
-        if (auto local_error = tr_error{}; !set_file_paths_in_session_thread(paths, {}, &local_error))
+        if (auto local_error = tr_error{}; !move_path_in_session_thread(oldpath, newpath, &local_error))
         {
             error = local_error.code();
         }

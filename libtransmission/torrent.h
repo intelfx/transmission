@@ -196,6 +196,11 @@ struct tr_torrent
         std::optional<std::string> location,
         SetFilePathsDoneFunc&& callback);
 
+    // Moves the file or folder at `oldpath` to `newpath`, both relative to
+    // the download dir, at any depth. A folder may be moved into an existing
+    // one, as long as no two files end up at the same path.
+    void move_path(std::string_view oldpath, std::string_view newpath, SetFilePathsDoneFunc&& callback);
+
     void rename_path(
         std::string_view oldpath,
         std::string_view newname,
@@ -1352,6 +1357,8 @@ private:
 
     // Updates the file paths and the name, but not the local data.
     void set_file_subpaths(std::vector<std::string> const& subpaths);
+
+    bool move_path_in_session_thread(std::string_view oldpath, std::string_view newpath, tr_error* error);
 
     void rename_path_in_session_thread(
         std::string_view oldpath,

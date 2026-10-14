@@ -139,6 +139,14 @@ protected:
         return result.value_or(tr_error{ ETIMEDOUT, "timed out" });
     }
 
+    static tr_error movePathAndWait(tr_torrent* tor, std::string_view oldpath, std::string_view newpath)
+    {
+        auto result = std::optional<tr_error>{};
+        tor->move_path(oldpath, newpath, [&result](tr_error const& error) { result = error; });
+        EXPECT_TRUE(waitFor([&result]() { return result.has_value(); }, MaxWaitMsec));
+        return result.value_or(tr_error{ ETIMEDOUT, "timed out" });
+    }
+
     static constexpr auto MultifileTorrentBase64 =
         "ZDEwOmNyZWF0ZWQgYnkyNTpUcmFuc21pc3Npb24vMi42MSAoMTM0MDcpMTM6Y3JlYXRpb24gZGF0"
         "ZWkxMzU4NTU1NDIwZTg6ZW5jb2Rpbmc1OlVURi04NDppbmZvZDU6ZmlsZXNsZDY6bGVuZ3RoaTI4"
@@ -526,6 +534,90 @@ TEST_F(RenameTest, sharedDirectory)
     EXPECT_TRUE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/silvestris/Felix"sv }));
     EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/domesticus"sv }));
     EXPECT_TRUE(tr_sys_path_exists(foreign));
+
+    // cleanup
+    tr_ctorFree(ctor);
+    torrentRemoveAndWait(tor, 0);
+}
+
+TEST_F(RenameTest, movePath)
+{
+    auto* const ctor = tr_ctorNew(session_);
+    auto* const tor = createTorrentFromBase64Metainfo(ctor, MultifileTorrentBase64);
+    EXPECT_TRUE(tr_isTorrent(tor));
+    auto const download_dir = std::string{ tor->download_dir().sv() };
+    createMultifileTorrentContents(download_dir);
+
+    // move a folder up...
+    auto error = movePathAndWait(tor, "Felidae/Felinae/Felis/catus", "catus");
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/Cheetah/Chester",
+          "catus/Kyphi",
+          "catus/Saffron",
+          "Felidae/Pantherinae/Panthera/Tiger/Tony" });
+    EXPECT_STREQ("Felidae", tr_torrentName(tor));
+    EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis"sv }));
+
+    // ...and down again, into an existing folder
+    error = movePathAndWait(tor, "catus", "Felidae/Felinae/Acinonyx/catus");
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/Cheetah/Chester",
+          "Felidae/Felinae/Acinonyx/catus/Kyphi",
+          "Felidae/Felinae/Acinonyx/catus/Saffron",
+          "Felidae/Pantherinae/Panthera/Tiger/Tony" });
+
+    // merge a folder into another one
+    error = movePathAndWait(tor, "Felidae/Felinae/Acinonyx/Cheetah", "Felidae/Felinae/Acinonyx/catus");
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/catus/Chester",
+          "Felidae/Felinae/Acinonyx/catus/Kyphi",
+          "Felidae/Felinae/Acinonyx/catus/Saffron",
+          "Felidae/Pantherinae/Panthera/Tiger/Tony" });
+
+    // replace a folder with one of its subfolders
+    error = movePathAndWait(tor, "Felidae/Pantherinae/Panthera/Tiger", "Felidae/Pantherinae");
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/catus/Chester",
+          "Felidae/Felinae/Acinonyx/catus/Kyphi",
+          "Felidae/Felinae/Acinonyx/catus/Saffron",
+          "Felidae/Pantherinae/Tony" });
+    EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Pantherinae/Panthera"sv }));
+
+    // move the whole torrent into a new top-level folder
+    error = movePathAndWait(tor, "Felidae", "Cats/Felidae");
+    EXPECT_FALSE(error) << error;
+    expectMultifileTorrentFiles(
+        tor,
+        { "Cats/Felidae/Felinae/Acinonyx/catus/Chester",
+          "Cats/Felidae/Felinae/Acinonyx/catus/Kyphi",
+          "Cats/Felidae/Felinae/Acinonyx/catus/Saffron",
+          "Cats/Felidae/Pantherinae/Tony" });
+    EXPECT_STREQ("Cats", tr_torrentName(tor));
+
+    // bad paths change nothing
+    EXPECT_EQ(EINVAL, movePathAndWait(tor, "Cats/Felidae/Pantherinae/Tony", "Cats/Felidae/Felinae").code());
+    EXPECT_EQ(EINVAL, movePathAndWait(tor, "Cats/Felidae/Pantherinae/Tony", "../Tony").code());
+    EXPECT_EQ(EINVAL, movePathAndWait(tor, "Cats/Felidae/Pantherinae/Tony", "/Tony").code());
+    EXPECT_EQ(EINVAL, movePathAndWait(tor, "Cats/Felidae/Pantherinae/Tony", "").code());
+    EXPECT_EQ(EINVAL, movePathAndWait(tor, "Cats/Felidae/Pantherinae/To", "Tony").code());
+    EXPECT_EQ(EINVAL, movePathAndWait(tor, "", "Tony").code());
+    expectMultifileTorrentFiles(
+        tor,
+        { "Cats/Felidae/Felinae/Acinonyx/catus/Chester",
+          "Cats/Felidae/Felinae/Acinonyx/catus/Kyphi",
+          "Cats/Felidae/Felinae/Acinonyx/catus/Saffron",
+          "Cats/Felidae/Pantherinae/Tony" });
+
+    blockingTorrentVerify(tor);
+    EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
 
     // cleanup
     tr_ctorFree(ctor);
