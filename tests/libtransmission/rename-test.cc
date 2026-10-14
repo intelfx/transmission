@@ -18,6 +18,7 @@
 #include <libtransmission/error.h>
 #include <libtransmission/file.h>
 #include <libtransmission/resume.h>
+#include <libtransmission/torrent-ctor.h>
 #include <libtransmission/torrent.h> // tr_isTorrent()
 #include <libtransmission/tr-strbuf.h>
 #include <libtransmission/utils.h>
@@ -675,6 +676,32 @@ TEST_F(RenameTest, setFilePaths)
 
     blockingTorrentVerify(tor);
     EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
+
+    // cleanup
+    tr_ctorFree(ctor);
+    torrentRemoveAndWait(tor, 0);
+}
+
+TEST_F(RenameTest, addWithFilePaths)
+{
+    // the data is already there, but laid out differently than in the metainfo
+    auto const download_dir = tr_pathbuf{ tr_sessionGetDownloadDir(session_) };
+    auto constexpr Subpaths = std::array<std::string_view, 4>{ "Cats/Chester", "Cats/Kyphi", "Felidae/Saffron", "Tony" };
+    for (size_t i = 0; i < std::size(Subpaths); ++i)
+    {
+        createFileWithContents(tr_pathbuf{ download_dir, '/', Subpaths[i] }, MultifileTorrentContents[i]);
+    }
+    sync();
+
+    auto* const ctor = tr_ctorNew(session_);
+    ctor->set_file_paths({ "Cats/Chester", "Cats/Kyphi", "Felidae/Saffron", "Tony" });
+    auto* const tor = createTorrentFromBase64Metainfo(ctor, MultifileTorrentBase64);
+    EXPECT_TRUE(tr_isTorrent(tor));
+
+    // the torrent found its data at the new paths
+    EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
+    expectMultifileTorrentFiles(tor, Subpaths);
+    EXPECT_STREQ("Felidae", tr_torrentName(tor));
 
     // cleanup
     tr_ctorFree(ctor);

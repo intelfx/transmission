@@ -957,6 +957,24 @@ void tr_torrent::init(tr_ctor const& ctor)
     ctor.init_torrent_priorities(*this);
     ctor.init_torrent_wanted(*this);
 
+    if (auto const& paths = ctor.file_paths(); !std::empty(paths))
+    {
+        auto error = tr_error{};
+        if (auto const subpaths = files().resolve_paths(paths, &error); subpaths)
+        {
+            set_file_subpaths(*subpaths);
+        }
+        else
+        {
+            tr_logAddWarnTor(
+                this,
+                fmt::format(
+                    fmt::runtime(_("Couldn't set the file paths: {error} ({error_code})")),
+                    fmt::arg("error", error.message()),
+                    fmt::arg("error_code", error.code())));
+        }
+    }
+
     refresh_current_dir();
 
     if ((loaded & tr_resume::Speedlimit) == 0)

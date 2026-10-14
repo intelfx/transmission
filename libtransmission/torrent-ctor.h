@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "libtransmission/transmission.h"
@@ -104,6 +105,19 @@ public:
     }
 
     void init_torrent_priorities(tr_torrent& tor) const;
+
+    // ---
+
+    // One entry per file; an empty entry keeps the file's path from the metainfo.
+    void set_file_paths(std::vector<std::optional<std::string>> paths)
+    {
+        file_paths_ = std::move(paths);
+    }
+
+    [[nodiscard]] constexpr auto const& file_paths() const noexcept
+    {
+        return file_paths_;
+    }
 
     // ---
 
@@ -251,6 +265,8 @@ private:
     std::vector<tr_file_index_t> low_;
     std::vector<tr_file_index_t> normal_;
     std::vector<tr_file_index_t> high_;
+
+    std::vector<std::optional<std::string>> file_paths_;
 
     std::vector<char> contents_;
 
