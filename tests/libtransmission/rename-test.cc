@@ -477,6 +477,61 @@ TEST_F(RenameTest, multifileTorrent)
 ****
 ***/
 
+TEST_F(RenameTest, sharedDirectory)
+{
+    auto* const ctor = tr_ctorNew(session_);
+    auto* const tor = createTorrentFromBase64Metainfo(ctor, MultifileTorrentBase64);
+    EXPECT_TRUE(tr_isTorrent(tor));
+    auto const download_dir = std::string{ tor->download_dir().sv() };
+    createMultifileTorrentContents(download_dir);
+
+    // files of another torrent share directories with this one's
+    auto const foreign = tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/catus/Garfield"sv };
+    auto const foreign_in_target = tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/silvestris/Kyphi"sv };
+    createFileWithContents(foreign, "Lasagna\n");
+    createFileWithContents(foreign_in_target, "Wild\n");
+
+    // renaming a folder only moves this torrent's files
+    EXPECT_EQ(0, torrentRenameAndWait(tor, "Felidae/Felinae/Felis/catus", "domesticus"));
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/Cheetah/Chester",
+          "Felidae/Felinae/Felis/domesticus/Kyphi",
+          "Felidae/Felinae/Felis/domesticus/Saffron",
+          "Felidae/Pantherinae/Panthera/Tiger/Tony" });
+    auto contents = std::vector<char>{};
+    EXPECT_TRUE(tr_file_read(foreign, contents));
+
+    // files of others are never overwritten
+    EXPECT_EQ(EEXIST, torrentRenameAndWait(tor, "Felidae/Felinae/Felis/domesticus", "silvestris"));
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/Cheetah/Chester",
+          "Felidae/Felinae/Felis/domesticus/Kyphi",
+          "Felidae/Felinae/Felis/domesticus/Saffron",
+          "Felidae/Pantherinae/Panthera/Tiger/Tony" });
+    EXPECT_TRUE(tr_file_read(foreign_in_target, contents));
+    EXPECT_EQ("Wild\n"sv, std::string_view(std::data(contents), std::size(contents)));
+
+    // ...but a folder that holds files of others can be renamed into
+    tr_sys_path_remove(foreign_in_target);
+    createFileWithContents(tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/silvestris/Felix"sv }, "Wonderful\n");
+    EXPECT_EQ(0, torrentRenameAndWait(tor, "Felidae/Felinae/Felis/domesticus", "silvestris"));
+    expectMultifileTorrentFiles(
+        tor,
+        { "Felidae/Felinae/Acinonyx/Cheetah/Chester",
+          "Felidae/Felinae/Felis/silvestris/Kyphi",
+          "Felidae/Felinae/Felis/silvestris/Saffron",
+          "Felidae/Pantherinae/Panthera/Tiger/Tony" });
+    EXPECT_TRUE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/silvestris/Felix"sv }));
+    EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ download_dir, "/Felidae/Felinae/Felis/domesticus"sv }));
+    EXPECT_TRUE(tr_sys_path_exists(foreign));
+
+    // cleanup
+    tr_ctorFree(ctor);
+    torrentRemoveAndWait(tor, 0);
+}
+
 TEST_F(RenameTest, setFilePaths)
 {
     auto* const ctor = tr_ctorNew(session_);

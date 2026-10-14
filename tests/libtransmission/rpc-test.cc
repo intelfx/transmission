@@ -14,7 +14,9 @@
 #include <vector>
 
 #include <libtransmission/transmission.h>
+#include <libtransmission/file.h>
 #include <libtransmission/rpcimpl.h>
+#include <libtransmission/tr-strbuf.h>
 #include <libtransmission/variant.h>
 
 #include "gtest/gtest.h"
@@ -324,7 +326,8 @@ TEST_F(RpcTest, idAsync)
             break;
         }
 
-        // cleanup
+        // cleanup; the next iteration renames to the same path, which must be free
+        tr_sys_path_remove(tr_pathbuf{ tor->current_dir(), "/files-filled-with-zeroes/512_test"sv });
         tr_torrentRemove(tor, false, nullptr, nullptr);
     }
 }

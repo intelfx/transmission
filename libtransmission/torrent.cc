@@ -2540,88 +2540,6 @@ auto renameFindAffectedFiles(tr_torrent const* tor, std::string_view oldpath)
     return indices;
 }
 
-int renamePath(tr_torrent const* tor, std::string_view oldpath, std::string_view newname)
-{
-    int err = 0;
-
-    auto const base = tor->is_done() || std::empty(tor->incomplete_dir()) ? tor->download_dir() : tor->incomplete_dir();
-
-    auto src = tr_pathbuf{ base, '/', oldpath };
-
-    if (!tr_sys_path_exists(src)) /* check for it as a partial */
-    {
-        src += tr_torrent_files::PartialFileSuffix;
-    }
-
-    if (tr_sys_path_exists(src))
-    {
-        auto const parent = tr_sys_path_dirname(src);
-        auto const tgt = tr_strv_ends_with(src, tr_torrent_files::PartialFileSuffix) ?
-            tr_pathbuf{ parent, '/', newname, tr_torrent_files::PartialFileSuffix } :
-            tr_pathbuf{ parent, '/', newname };
-
-        auto tmp = errno;
-        bool const tgt_exists = tr_sys_path_exists(tgt);
-        errno = tmp;
-
-        if (!tgt_exists)
-        {
-            tmp = errno;
-
-            if (auto error = tr_error{}; !tr_sys_path_rename(src, tgt, &error))
-            {
-                err = error.code();
-            }
-
-            errno = tmp;
-        }
-    }
-
-    return err;
-}
-
-void renameTorrentFileString(tr_torrent* tor, std::string_view oldpath, std::string_view newname, tr_file_index_t file_index)
-{
-    auto name = std::string{};
-    auto const subpath = std::string_view{ tor->file_subpath(file_index) };
-    auto const oldpath_len = std::size(oldpath);
-
-    if (!tr_strv_contains(oldpath, '/'))
-    {
-        if (oldpath_len >= std::size(subpath))
-        {
-            name = newname;
-        }
-        else
-        {
-            name = fmt::format("{:s}/{:s}"sv, newname, subpath.substr(oldpath_len + 1));
-        }
-    }
-    else
-    {
-        auto const tmp = tr_sys_path_dirname(oldpath);
-
-        if (std::empty(tmp))
-        {
-            return;
-        }
-
-        if (oldpath_len >= std::size(subpath))
-        {
-            name = fmt::format("{:s}/{:s}"sv, tmp, newname);
-        }
-        else
-        {
-            name = fmt::format("{:s}/{:s}/{:s}"sv, tmp, newname, subpath.substr(oldpath_len + 1));
-        }
-    }
-
-    if (subpath != name)
-    {
-        tor->set_file_subpath(file_index, name);
-    }
-}
-
 } // namespace rename_helpers
 } // namespace
 
@@ -2645,24 +2563,19 @@ void tr_torrent::rename_path_in_session_thread(
     }
     else
     {
-        error = renamePath(this, oldpath, newname);
+        auto const newpath = tr_strv_contains(oldpath, '/') ? tr_pathbuf{ tr_sys_path_dirname(oldpath), '/', newname } :
+                                                              tr_pathbuf{ newname };
 
-        if (error == 0)
+        auto paths = std::vector<std::optional<std::string>>(file_count());
+        for (auto const file_index : file_indices)
         {
-            /* update tr_info.files */
-            for (auto const& file_index : file_indices)
-            {
-                renameTorrentFileString(this, oldpath, newname, file_index);
-            }
+            auto const subpath = std::string_view{ file_subpath(file_index) };
+            paths[file_index] = tr_pathbuf{ newpath, subpath.substr(std::size(oldpath)) }.sv();
+        }
 
-            /* update tr_info.name if user changed the toplevel */
-            if (std::size(file_indices) == file_count() && !tr_strv_contains(oldpath, '/'))
-            {
-                set_name(newname);
-            }
-
-            mark_edited();
-            set_dirty();
+        if (auto local_error = tr_error{}; !set_file_paths_in_session_thread(paths, {}, &local_error))
+        {
+            error = local_error.code();
         }
     }
 

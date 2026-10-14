@@ -898,8 +898,11 @@ using tr_torrent_rename_done_func = std::function<
  *   in files[*].name, or contains a directory separator, or is nullptr, "",
  *   ".", or "..", the error argument will be EINVAL.
  *
- *   If the path exists on disk but can't be renamed, the error argument
- *   will be the errno set by rename().
+ *   The torrent's files are moved on disk one by one, so files of other
+ *   torrents that share a renamed folder stay where they are. If any of
+ *   the new paths is already taken on disk, the error argument will be
+ *   EEXIST. If a file can't be moved, the error argument will be the errno
+ *   of that failure. In either case, nothing gets renamed.
  */
 void tr_torrentRenamePath(
     tr_torrent* tor,
