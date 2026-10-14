@@ -1829,6 +1829,21 @@ void add_torrent_impl(struct tr_rpc_idle_data* data, tr_ctor& ctor)
 {
     using namespace JsonRpc;
 
+    if (auto const& paths = ctor.file_paths(); !std::empty(paths))
+    {
+        if (std::empty(ctor.metainfo()))
+        {
+            tr_rpc_idle_done(data, Error::INVALID_PARAMS, "file_paths needs the torrent's metainfo, not a magnet link"sv);
+            return;
+        }
+
+        if (auto error = tr_error{}; !ctor.metainfo().files().resolve_paths(paths, &error))
+        {
+            tr_rpc_idle_done(data, Error::INVALID_PARAMS, error.message());
+            return;
+        }
+    }
+
     tr_torrent* duplicate_of = nullptr;
     tr_torrent* tor = tr_torrentNew(&ctor, &duplicate_of);
 
@@ -2012,6 +2027,18 @@ void torrentAdd(tr_session* session, tr_variant::Map const& args_in, tr_rpc_idle
         }
 
         ctor.set_labels(std::move(labels));
+    }
+
+    if (auto const* val = args_in.find_if<tr_variant::Vector>(TR_KEY_file_paths); val != nullptr)
+    {
+        auto paths = file_paths_from_list(*val);
+        if (!paths)
+        {
+            tr_rpc_idle_done(idle_data, Error::INVALID_PARAMS, "file_paths must be an array of strings and nulls"sv);
+            return;
+        }
+
+        ctor.set_file_paths(std::move(*paths));
     }
 
     if (auto const val = args_in.value_if<bool>(TR_KEY_sequential_download); val)

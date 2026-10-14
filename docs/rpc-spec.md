@@ -504,8 +504,12 @@ Request parameters:
 | `priority_normal`                | array     | indices of normal-priority file(s)
 | `sequential_download`            | boolean   | download torrent pieces sequentially
 | `sequential_download_from_piece` | number    | download from a specific piece when sequential download is enabled
+| `file_paths`                     | array     | one entry per file: the file's path, relative to `download_dir`, or `null` to keep the path from the metainfo
 
 Either `filename` **or** `metainfo` **must** be included. All other parameters are optional.
+
+`file_paths` takes the same values as in `torrent_rename_files` (3.9), but no data is moved: the torrent looks for its data at these paths from the start.
+It can't be used with magnet links, since their files aren't known yet.
 
 The format of the `cookies` should be `NAME=CONTENTS`, where `NAME` is the cookie name and `CONTENTS` is what the cookie should contain. Set multiple cookies like this: `name1=content1; name2=content2;` etc. See [libcurl documentation](http://curl.haxx.se/libcurl/c/curl_easy_setopt.html#CURLOPTCOOKIE) for more information.
 
@@ -1168,3 +1172,4 @@ Unreleased (`rpc_version_semver` 6.1.0, `rpc_version`: 20)
 | `torrent_merge` | new method
 | `torrent_rename_files` | new method
 | `torrent_rename_path` | new arg `new_path`
+| `torrent_add` | new arg `file_paths`

@@ -1112,6 +1112,70 @@ TEST_F(RpcTest, torrentRenamePathNewPath)
     tr_torrentRemove(tor, false, nullptr, nullptr);
 }
 
+TEST_F(RpcTest, torrentAddFilePaths)
+{
+    auto const exec = [this](std::string_view filename, tr_variant::Vector paths)
+    {
+        auto params = tr_variant::Map{ 3U };
+        params.try_emplace(TR_KEY_filename, filename);
+        params.try_emplace(TR_KEY_paused, true);
+        params.try_emplace(TR_KEY_file_paths, std::move(paths));
+
+        auto request_map = tr_variant::Map{ 4U };
+        request_map.try_emplace(TR_KEY_jsonrpc, JsonRpc::Version);
+        request_map.try_emplace(TR_KEY_method, tr_variant::unmanaged_string(TR_KEY_torrent_add));
+        request_map.try_emplace(TR_KEY_id, 12345);
+        request_map.try_emplace(TR_KEY_params, std::move(params));
+
+        auto request = tr_variant{ std::move(request_map) };
+        auto promise = std::promise<tr_variant>{};
+        auto future = promise.get_future();
+        tr_rpc_request_exec(
+            session_,
+            request,
+            [&promise](tr_session* /*session*/, tr_variant&& resp) { promise.set_value(std::move(resp)); });
+        auto response = future.get();
+
+        auto* const response_map = response.get_if<tr_variant::Map>();
+        EXPECT_NE(nullptr, response_map);
+        auto* const result = response_map != nullptr ? response_map->find_if<tr_variant::Map>(TR_KEY_result) : nullptr;
+        return result != nullptr ? std::optional<tr_variant::Map>{ std::move(*result) } : std::nullopt;
+    };
+
+    auto const make_paths = [](std::initializer_list<tr_variant> paths)
+    {
+        auto vec = tr_variant::Vector{};
+        for (auto const& path : paths)
+        {
+            vec.emplace_back().merge(path);
+        }
+        return vec;
+    };
+
+    // "android x86 8.1 r6 ISO/android-x86-8.1-r6.iso"
+    auto const filename = tr_pathbuf{ LIBTRANSMISSION_TEST_ASSETS_DIR, "/Android-x86 8.1 r6 iso.torrent"sv };
+
+    // bad requests add nothing
+    EXPECT_FALSE(exec(filename, make_paths({ "a", "b" })));
+    EXPECT_FALSE(exec(filename, make_paths({ "../a" })));
+    EXPECT_FALSE(exec(filename, make_paths({ 1 })));
+    EXPECT_FALSE(exec("magnet:?xt=urn:btih:fa5794674a18241bec985ddc3390e3cb171345e4"sv, make_paths({ "a" })));
+    EXPECT_EQ(0U, std::size(session_->torrents()));
+
+    // the torrent is created with the given paths
+    auto const result = exec(filename, make_paths({ "android-x86-8.1-r6.iso" }));
+    ASSERT_TRUE(result);
+    auto const* const added = result->find_if<tr_variant::Map>(TR_KEY_torrent_added);
+    ASSERT_NE(nullptr, added);
+    EXPECT_EQ("android-x86-8.1-r6.iso"sv, added->value_if<std::string_view>(TR_KEY_name));
+    auto* const tor = session_->torrents().get(static_cast<tr_torrent_id_t>(added->value_if<int64_t>(TR_KEY_id).value_or(0)));
+    ASSERT_NE(nullptr, tor);
+    EXPECT_EQ("android-x86-8.1-r6.iso"sv, tor->file_subpath(0));
+
+    // cleanup
+    tr_torrentRemove(tor, false, nullptr, nullptr);
+}
+
 TEST_F(RpcTest, torrentGetLegacy)
 {
     auto* tor = zeroTorrentInit(ZeroTorrentState::NoFiles);
