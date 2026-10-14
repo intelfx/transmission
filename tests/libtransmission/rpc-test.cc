@@ -1038,6 +1038,80 @@ TEST_F(RpcTest, torrentRenameFiles)
     tr_torrentRemove(tor, false, nullptr, nullptr);
 }
 
+TEST_F(RpcTest, torrentRenamePathNewPath)
+{
+    auto* const tor = zeroTorrentInit(ZeroTorrentState::Complete);
+    ASSERT_NE(nullptr, tor);
+    auto const tor_id = tor->id();
+    auto const download_dir = std::string{ tor->download_dir().sv() };
+
+    auto const exec = [this, tor_id](tr_variant::Map params)
+    {
+        params.try_emplace(TR_KEY_ids, tor_id);
+
+        auto request_map = tr_variant::Map{ 4U };
+        request_map.try_emplace(TR_KEY_jsonrpc, JsonRpc::Version);
+        request_map.try_emplace(TR_KEY_method, tr_variant::unmanaged_string(TR_KEY_torrent_rename_path));
+        request_map.try_emplace(TR_KEY_id, 12345);
+        request_map.try_emplace(TR_KEY_params, std::move(params));
+
+        auto request = tr_variant{ std::move(request_map) };
+        auto promise = std::promise<tr_variant>{};
+        auto future = promise.get_future();
+        tr_rpc_request_exec(
+            session_,
+            request,
+            [&promise](tr_session* /*session*/, tr_variant&& resp) { promise.set_value(std::move(resp)); });
+        auto response = future.get();
+
+        auto* const response_map = response.get_if<tr_variant::Map>();
+        EXPECT_NE(nullptr, response_map);
+        auto* const result = response_map != nullptr ? response_map->find_if<tr_variant::Map>(TR_KEY_result) : nullptr;
+        return result != nullptr ? std::optional<tr_variant::Map>{ std::move(*result) } : std::nullopt;
+    };
+
+    // move a file out of its folder
+    auto params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_path, "files-filled-with-zeroes/512"sv);
+    params.try_emplace(TR_KEY_new_path, "zeroes/512"sv);
+    auto result = exec(std::move(params));
+    ASSERT_TRUE(result);
+    EXPECT_EQ(tor_id, result->value_if<int64_t>(TR_KEY_id));
+    EXPECT_EQ("files-filled-with-zeroes/512"sv, result->value_if<std::string_view>(TR_KEY_path));
+    EXPECT_EQ("512"sv, result->value_if<std::string_view>(TR_KEY_name));
+    EXPECT_EQ("zeroes/512"sv, result->value_if<std::string_view>(TR_KEY_new_path));
+    EXPECT_EQ("zeroes/512"sv, tor->file_subpath(2));
+    EXPECT_EQ(tr_pathbuf(download_dir, "/zeroes/512"sv), tr_torrentFindFile(tor, 2));
+
+    // a path that is taken by another file
+    params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_path, "zeroes/512"sv);
+    params.try_emplace(TR_KEY_new_path, "files-filled-with-zeroes/4096"sv);
+    EXPECT_FALSE(exec(std::move(params)));
+    EXPECT_EQ("zeroes/512"sv, tor->file_subpath(2));
+
+    // `name` and `new_path` are mutually exclusive
+    params = tr_variant::Map{ 3U };
+    params.try_emplace(TR_KEY_path, "zeroes/512"sv);
+    params.try_emplace(TR_KEY_name, "1024"sv);
+    params.try_emplace(TR_KEY_new_path, "1024"sv);
+    EXPECT_FALSE(exec(std::move(params)));
+    EXPECT_EQ("zeroes/512"sv, tor->file_subpath(2));
+
+    // `name` keeps working as before, and its response has `new_path` too
+    params = tr_variant::Map{ 2U };
+    params.try_emplace(TR_KEY_path, "zeroes/512"sv);
+    params.try_emplace(TR_KEY_name, "1024"sv);
+    result = exec(std::move(params));
+    ASSERT_TRUE(result);
+    EXPECT_EQ("1024"sv, result->value_if<std::string_view>(TR_KEY_name));
+    EXPECT_EQ("zeroes/1024"sv, result->value_if<std::string_view>(TR_KEY_new_path));
+    EXPECT_EQ("zeroes/1024"sv, tor->file_subpath(2));
+
+    // cleanup
+    tr_torrentRemove(tor, false, nullptr, nullptr);
+}
+
 TEST_F(RpcTest, torrentGetLegacy)
 {
     auto* tor = zeroTorrentInit(ZeroTorrentState::NoFiles);

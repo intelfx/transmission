@@ -553,8 +553,14 @@ Request parameters:
 | `ids` | array | the torrent list, as described in 3.1 (must only be 1 torrent)
 | `path` | string | the path to the file or folder that will be renamed
 | `name` | string | the file or folder's new name
+| `new_path` | string | the file or folder's new path, relative to the torrent's location (instead of `name`)
 
-Response parameters: `path`, `name`, and `id`, holding the torrent ID integer
+With `name`, the file or folder stays in its parent folder. With `new_path`,
+it can be moved anywhere within the torrent, including into an existing
+folder, as long as no two files end up at the same path. Either way, the
+torrent's files are moved on disk one by one (see `torrent_rename_files`).
+
+Response parameters: `path`, `name`, `new_path`, and `id`, holding the torrent ID integer
 
 ### 3.8 Merging torrents' statistics
 Method name: `torrent_merge`
@@ -1161,3 +1167,4 @@ Unreleased (`rpc_version_semver` 6.1.0, `rpc_version`: 20)
 | `session_set` | new arg `proxy_url`
 | `torrent_merge` | new method
 | `torrent_rename_files` | new method
+| `torrent_rename_path` | new arg `new_path`

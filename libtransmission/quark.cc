@@ -341,6 +341,7 @@ auto constexpr MyStatic = std::array<std::string_view, TR_N_KEYS>{
     "msg_type"sv, // BT protocol
     "mtimes"sv, // .resume
     "name"sv, // .resume, .torrent, rpc
+    "new_path"sv, // rpc
     "nextAnnounceTime"sv, // rpc
     "nextScrapeTime"sv, // rpc
     "next_announce_time"sv, // rpc

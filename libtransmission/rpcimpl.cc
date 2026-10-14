@@ -1502,6 +1502,9 @@ void torrentRenamePathDone(tr_torrent* tor, char const* oldpath, char const* new
     data->args_out.try_emplace(TR_KEY_id, tor->id());
     data->args_out.try_emplace(TR_KEY_path, oldpath);
     data->args_out.try_emplace(TR_KEY_name, newname);
+    data->args_out.try_emplace(
+        TR_KEY_new_path,
+        tr_strv_contains(oldpath, '/') ? tr_pathbuf{ tr_sys_path_dirname(oldpath), '/', newname }.sv() : newname);
 
     if (error == 0)
     {
@@ -1525,6 +1528,39 @@ void torrentRenamePath(tr_session* session, tr_variant::Map const& args_in, stru
     }
 
     auto const oldpath = args_in.value_if<std::string_view>(TR_KEY_path).value_or(""sv);
+
+    if (auto const newpath = args_in.value_if<std::string_view>(TR_KEY_new_path))
+    {
+        if (args_in.contains(TR_KEY_name))
+        {
+            tr_rpc_idle_done(idle_data, Error::INVALID_PARAMS, "name and new_path can't be used together"sv);
+            return;
+        }
+
+        torrents[0]->move_path(
+            oldpath,
+            *newpath,
+            [idle_data, tor_id = torrents[0]->id(), oldpath = std::string{ oldpath }, newpath = std::string{ *newpath }](
+                tr_error const& error)
+            {
+                idle_data->args_out.try_emplace(TR_KEY_id, tor_id);
+                idle_data->args_out.try_emplace(TR_KEY_path, oldpath);
+                idle_data->args_out.try_emplace(TR_KEY_name, tr_sys_path_basename(newpath));
+                idle_data->args_out.try_emplace(TR_KEY_new_path, newpath);
+
+                if (error)
+                {
+                    auto const code = error.code() == EINVAL ? Error::INVALID_PARAMS : Error::SYSTEM_ERROR;
+                    tr_rpc_idle_done(idle_data, code, error.message());
+                }
+                else
+                {
+                    tr_rpc_idle_done(idle_data, Error::SUCCESS, {});
+                }
+            });
+        return;
+    }
+
     auto const newname = args_in.value_if<std::string_view>(TR_KEY_name).value_or(""sv);
     torrents[0]->rename_path(
         oldpath,
