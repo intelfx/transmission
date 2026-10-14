@@ -231,23 +231,22 @@ bool tr_torrent_files::move(
             err = true;
             break;
         }
-    }
 
-    // after moving the files, remove any leftover empty directories
-    if (!err)
-    {
-        auto const remove_empty_directories = [](char const* filename)
-        {
-            if (is_empty_folder(filename))
-            {
-                tr_sys_path_remove(filename, nullptr);
-            }
-        };
-
-        remove(old_parent, parent_name, remove_empty_directories);
+        prune_empty_dirs(tr_sys_path_dirname(old_path), old_parent);
     }
 
     return !err;
+}
+
+void tr_torrent_files::prune_empty_dirs(std::string_view const dir_in, std::string_view const stop_at)
+{
+    auto const stop_at_as_dir = tr_pathbuf{ stop_at, '/' };
+    auto dir = tr_pathbuf{ dir_in };
+
+    while (tr_strv_starts_with(dir.sv(), stop_at_as_dir.sv()) && is_empty_folder(dir.c_str()) && tr_sys_path_remove(dir))
+    {
+        dir.popdir();
+    }
 }
 
 // ---

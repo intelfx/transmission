@@ -193,4 +193,50 @@ TEST_F(MoveTest, setLocation)
     tr_torrentRemove(tor, true, nullptr, nullptr);
 }
 
+TEST_F(MoveTest, setLocationLeavesForeignFiles)
+{
+    auto const target_dir = tr_pathbuf{ session_->configDir(), "/target"sv };
+    tr_sys_dir_create(target_dir.data(), TR_SYS_DIR_CREATE_PARENTS, 0777, nullptr);
+
+    auto* const tor = zeroTorrentInit(ZeroTorrentState::Complete);
+    blockingTorrentVerify(tor);
+    EXPECT_EQ(0, tr_torrentStat(tor)->leftUntilDone);
+
+    auto const set_location_and_wait = [tor](std::string_view location)
+    {
+        auto state = -1;
+        tr_torrentSetLocation(tor, tr_pathbuf{ location }, true, &state);
+        EXPECT_TRUE(waitFor([&state]() { return state == TR_LOC_DONE; }, MaxWaitMsec));
+        sync();
+    };
+
+    // files of other torrents share the torrent's top-level directory
+    auto const source_dir = tr_pathbuf{ tor->current_dir() };
+    auto const source_top = tr_pathbuf{ source_dir, '/', tor->name() };
+    auto const foreign_file = tr_pathbuf{ source_top, "/foreign.txt"sv };
+    auto const foreign_junk = tr_pathbuf{ source_top, "/Thumbs.db"sv };
+    createFileWithContents(foreign_file, "foreign"sv);
+    createFileWithContents(foreign_junk, "junk"sv);
+
+    set_location_and_wait(target_dir);
+    EXPECT_TRUE(tr_sys_path_exists(foreign_file));
+    EXPECT_TRUE(tr_sys_path_exists(foreign_junk));
+    for (tr_file_index_t i = 0, n = tr_torrentFileCount(tor); i < n; ++i)
+    {
+        EXPECT_EQ(tr_pathbuf(target_dir, '/', tr_torrentFile(tor, i).name), tr_torrentFindFile(tor, i));
+    }
+
+    // directories emptied by the move are removed, but not the old location itself
+    set_location_and_wait(source_dir);
+    EXPECT_FALSE(tr_sys_path_exists(tr_pathbuf{ target_dir, '/', tor->name() }));
+    EXPECT_TRUE(tr_sys_path_exists(target_dir));
+    for (tr_file_index_t i = 0, n = tr_torrentFileCount(tor); i < n; ++i)
+    {
+        EXPECT_EQ(tr_pathbuf(source_dir, '/', tr_torrentFile(tor, i).name), tr_torrentFindFile(tor, i));
+    }
+
+    // cleanup
+    tr_torrentRemove(tor, true, nullptr, nullptr);
+}
+
 } // namespace libtransmission::test

@@ -116,6 +116,10 @@ public:
         std::string_view parent_name = "",
         tr_error* error = nullptr) const;
 
+    // Removes `dir` and then each of its parents, as long as they are empty
+    // directories, but never `stop_at` or anything outside of it.
+    static void prune_empty_dirs(std::string_view dir, std::string_view stop_at);
+
     using FileFunc = std::function<void(char const* filename)>;
     void remove(std::string_view parent_in, std::string_view tmpdir_prefix, FileFunc const& func, tr_error* error = nullptr)
         const;
