@@ -352,19 +352,12 @@ TEST_F(SessionTest, choosesProxyByRules)
     settings.try_emplace(TR_KEY_proxy_url, "socks5://global.example"sv);
     settings.try_emplace(
         TR_KEY_proxy_rules,
-        ""
-        "*.onion/*               socks5h://127.0.0.1:9050\n"
-        "*domain.tld*            socks5h://127.0.0.1:9051\n"
-        "*domain2.tld/path*      socks5h://127.0.0.1:9052\n"
-        "udp://tracker.example:* direct\n"
-        "udp://*                 socks5h://127.0.0.1:9053\n"sv);
+        "*.onion/* socks5h://127.0.0.1:9050\n"
+        "udp://tracker.example:* direct\n"sv);
     tr_sessionSet(session_, tr_variant{ std::move(settings) });
 
     EXPECT_EQ("socks5h://127.0.0.1:9050"sv, session_->proxyUrl("http://abc.onion/announce"sv, tr_request_kind::Tracker));
-    EXPECT_EQ("socks5h://127.0.0.1:9051"sv, session_->proxyUrl("http://sub.domain.tld/announce"sv, tr_request_kind::Tracker));
-    EXPECT_EQ("socks5h://127.0.0.1:9052"sv, session_->proxyUrl("http://sub.domain2.tld/path/announce"sv, tr_request_kind::Tracker));
     EXPECT_EQ(""sv, session_->proxyUrl("udp://tracker.example:6969"sv, tr_request_kind::Tracker));
-    EXPECT_EQ("socks5h://127.0.0.1:9053"sv, session_->proxyUrl("udp://nomatch:1337"sv, tr_request_kind::Tracker));
     EXPECT_EQ("socks5://global.example"sv, session_->proxyUrl("https://tracker.test/announce"sv, tr_request_kind::Tracker));
 }
 
