@@ -158,6 +158,28 @@ CURLcode ssl_context_func(CURL* /*curl*/, void* ssl_ctx, void* /*user_data*/)
 
 // ---
 
+std::string_view tr_request_kind_to_string(tr_request_kind kind)
+{
+    switch (kind)
+    {
+        case tr_request_kind::Tracker:
+            return "Tracker"sv;
+        case tr_request_kind::Webseed:
+            return "Webseed"sv;
+        case tr_request_kind::Blocklist:
+            return "Blocklist"sv;
+        case tr_request_kind::TorrentFile:
+            return "TorrentFile"sv;
+        case tr_request_kind::PortCheck:
+            return "PortCheck"sv;
+        case tr_request_kind::PublicAddress:
+            return "PublicAddress"sv;
+        case tr_request_kind::Other:
+            return "Other"sv;
+    }
+    return "<unknown>"sv;
+}
+
 class tr_web::Impl
 {
 public:
@@ -644,10 +666,25 @@ public:
 
         if (auto const& proxy_url = mediator.proxyUrl(task.url(), task.kind()); proxy_url)
         {
+            tr_logAddInfo(
+                fmt::format(
+                    "WEB-PROXY: {task_kind}: {task_url} -> {proxy_url}",
+                    fmt::arg("task_kind", tr_request_kind_to_string(task.kind())),
+                    fmt::arg("task_url", task.url()),
+                    fmt::arg("proxy_url", *proxy_url)
+                )
+            );
             (void)curl_easy_setopt(e, CURLOPT_PROXY, proxy_url->c_str());
         }
         else
         {
+            tr_logAddInfo(
+                fmt::format(
+                    "WEB-PROXY: {task_kind}: {task_url} -> DIRECT",
+                    fmt::arg("task_kind", tr_request_kind_to_string(task.kind())),
+                    fmt::arg("task_url", task.url())
+                )
+            );
             (void)curl_easy_setopt(e, CURLOPT_PROXY, nullptr);
         }
 

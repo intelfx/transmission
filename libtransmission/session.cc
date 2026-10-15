@@ -265,12 +265,48 @@ tr_announcer_udp::Mediator::UdpRoute tr_session::AnnouncerUdpMediator::udp_route
     auto const proxy_url = session_.proxyUrl(tracker_url, tr_request_kind::Tracker);
     if (!proxy_url || std::empty(*proxy_url))
     {
+        tr_logAddInfo(
+            fmt::format(
+                "WEB-PROXY: {task_kind}: {task_url} -> DIRECT",
+                fmt::arg("task_kind", tr_request_kind_to_string(tr_request_kind::Tracker)),
+                fmt::arg("task_url", tracker_url)
+            )
+        );
         return { Type::Direct };
     }
 
     if (auto* const relay = session_.socks5_relay(*proxy_url); relay != nullptr)
     {
+        tr_logAddInfo(
+            fmt::format(
+                "UDP-PROXY: {task_kind}: {task_url} -> {proxy_url}",
+                fmt::arg("task_kind", tr_request_kind_to_string(tr_request_kind::Tracker)),
+                fmt::arg("task_url", tracker_url),
+                fmt::arg("proxy_url", *proxy_url)
+            )
+        );
         return { Type::Relay, relay };
+    }
+
+    if (Policy == UnsupportedProxyPolicy::Block)
+    {
+        tr_logAddWarn(
+            fmt::format(
+                "UDP-PROXY: {task_kind}: {task_url} -> BLOCKED",
+                fmt::arg("task_kind", tr_request_kind_to_string(tr_request_kind::Tracker)),
+                fmt::arg("task_url", tracker_url)
+            )
+        );
+    }
+    else
+    {
+        tr_logAddInfo(
+            fmt::format(
+                "UDP-PROXY: {task_kind}: {task_url} -> DIRECT",
+                fmt::arg("task_kind", tr_request_kind_to_string(tr_request_kind::Tracker)),
+                fmt::arg("task_url", tracker_url)
+            )
+        );
     }
 
     return { Policy == UnsupportedProxyPolicy::Block ? Type::Blocked : Type::Direct };

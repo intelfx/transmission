@@ -27,6 +27,7 @@ enum class tr_request_kind : uint8_t
     PublicAddress, // looking up our public IP address
     Other,
 };
+std::string_view tr_request_kind_to_string(tr_request_kind kind);
 
 class tr_web
 {
